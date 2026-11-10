@@ -82,9 +82,20 @@ def _decode(raw):
     return raw.decode("latin-1")
 
 
+MARKER = "created by VideoID"     # NFOs written by `videoid kodi` - not evidence for a new scan
+
+
+def is_ours(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return MARKER in fh.read(4096)
+    except OSError:
+        return False
+
+
 def find_nfos(video):
     folder = video.parent
-    nfos = sorted(folder.glob("*.nfo"))
+    nfos = sorted(n for n in folder.glob("*.nfo") if not is_ours(n))
     if not nfos:
         return []
     same = [n for n in nfos if n.stem.lower() == video.stem.lower()]

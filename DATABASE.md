@@ -108,8 +108,16 @@ PK `(file_id, name, role, source)`. NFO people are not stored here; they live in
  "year": 1966, "runtime": 92,
  "credits": {"director": ["Jiří Menzel"], "composer": ["Jiří Šust"], "cast": ["Václav Neckář", "…"]},
  "aliases": {"Zhang Yimou": ["张艺谋"]},
- "sources": ["csfd", "imdb", "tmdb", "wikidata"]}
+ "sources": ["csfd", "imdb", "tmdb", "wikidata"],
+ "details": {"csfd": {"title": "Ostře sledované vlaky", "plot": "…", "genres": ["Drama", "Komedie"],
+                      "countries": ["Československo"], "tags": ["…"], "premiered": "1966-11-18",
+                      "rating": {"value": 8.4, "max": 10, "votes": 51234},
+                      "poster": "https://…jpg", "fanart": "https://…jpg"},
+             "tmdb": {"title": "…", "originaltitle": "…", "tagline": "…", "studios": ["…"],
+                      "characters": {"Václav Neckář": "Miloš Hrma"}, "thumbs": {"Václav Neckář": "https://…"}}}}
 ```
+- `details` holds descriptive metadata per source, used by `videoid kodi` for Kodi NFOs and artwork.
+  Each field is picked from the sources in `kodi.prefer` order. Films stored before this field existed get it filled on the first `videoid kodi` run.
 - `credits` keeps cast in billing order.
 - `aliases` holds the same person's name in other scripts or spellings (Wikidata labels in the OCR languages, TMDB `original_name`). They are used for matching but never counted twice.
 

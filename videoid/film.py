@@ -26,6 +26,17 @@ class Film:
         self.sources = {source} if source else set()
         self.hits = 0            # how many reverse-lookup people pointed to this film
         self.aliases = {}        # canonical name -> other spellings/scripts ("Zhang Yimou" -> ["张艺谋"])
+        # descriptive metadata per source, used for Kodi NFOs:
+        # {"tmdb": {"title", "originaltitle", "plot", "tagline", "genres", "countries", "studios", "tags",
+        #           "premiered", "rating": {"value", "max", "votes"}, "poster", "fanart",
+        #           "characters": {actor: role}, "thumbs": {actor: url}}, "csfd": {...}}
+        self.details = {}
+
+    def set_details(self, source, **fields):
+        d = self.details.setdefault(source, {})
+        for k, v in fields.items():
+            if v not in (None, "", [], {}):
+                d[k] = v
 
     def add_alias(self, name, alias):
         if alias and compact(alias) != compact(name):
@@ -82,6 +93,8 @@ class Film:
         for n, al in o.aliases.items():
             for a in al:
                 self.add_alias(n, a)
+        for src, d in o.details.items():
+            self.details.setdefault(src, {}).update(d)
         return self
 
     def n_people(self):
@@ -103,7 +116,7 @@ class Film:
     def to_dict(self):
         return {"ids": self.ids, "title": self.title, "titles": self.titles, "year": self.year,
                 "runtime": self.runtime, "credits": self.credits, "aliases": self.aliases,
-                "sources": sorted(self.sources)}
+                "sources": sorted(self.sources), "details": self.details}
 
     @classmethod
     def from_dict(cls, d):
@@ -111,6 +124,7 @@ class Film:
                 runtime=d.get("runtime"), credits=d.get("credits"))
         f.sources = set(d.get("sources") or [])
         f.aliases = d.get("aliases") or {}
+        f.details = d.get("details") or {}
         return f
 
     def __repr__(self):

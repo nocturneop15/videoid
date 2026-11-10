@@ -65,6 +65,10 @@ def cmd_scan(cfg, args):
         if fid:
             results.append(fid)
             print(describe(ctx.db, fid, top=args.top), flush=True)
+            if args.kodi:
+                from .kodi import write_for_file
+                print("   kodi: " + write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"],
+                                                  overwrite=args.overwrite_nfo), flush=True)
     if args.json:
         Path(args.json).write_text(json.dumps([_file_record(ctx.db, f) for f in results], indent=2,
                                               ensure_ascii=False), encoding="utf-8")
@@ -148,6 +152,50 @@ def cmd_export(cfg, args):
     else:
         out.write_text(json.dumps(recs, indent=2, ensure_ascii=False), encoding="utf-8")
     log(f"exported {len(recs)} files to {out}", 0)
+    return 0
+
+
+def _select_files(db, refs):
+    """Database file ids for ids, files or folders (everything analysed below a folder)."""
+    out = []
+    rows = db.files()
+    for ref in refs:
+        if ref.isdigit() and not Path(ref).exists():
+            out.append(int(ref))
+            continue
+        forms = {str(p).lower().rstrip("\\/") for p in (Path(ref).absolute(), Path(ref).resolve())}
+        hit = [r["id"] for r in rows
+               if any(r["path"].lower() == f or r["path"].lower().startswith(f + "\\") for f in forms)]
+        if not hit:
+            log(f"{ref}: nothing analysed there yet (run 'videoid scan' first)", 0)
+        out += hit
+    return list(dict.fromkeys(out))
+
+
+def cmd_kodi(cfg, args):
+    from .db import DB
+    from .kodi import write_for_file
+    from .matcher import Matcher
+    from .net import Http
+    if args.min_verdict:
+        cfg["kodi"]["min_verdict"] = args.min_verdict.upper()
+    if args.no_artwork:
+        cfg["kodi"]["artwork"] = False
+    if args.prefer:
+        cfg["kodi"]["prefer"] = [s.strip() for s in args.prefer.split(",") if s.strip()]
+    db = DB(config.db_path(cfg))
+    matcher = Matcher(Http(db, cfg["cache_days"], offline=args.offline), cfg, db)
+    fids = _select_files(db, args.paths)
+    written = 0
+    for fid in fids:
+        try:
+            status = write_for_file(db, fid, matcher, cfg["kodi"], overwrite=args.overwrite,
+                                    dry_run=args.dry_run, refresh=args.refresh)
+        except OSError as e:
+            status = f"ERROR {e}"
+        written += status.startswith(("wrote", "would write"))
+        print(f"{db.file_get(fid)['path']}\n   {status}", flush=True)
+    log(f"\n{written} of {len(fids)} files got Kodi metadata", 0)
     return 0
 
 
@@ -248,6 +296,8 @@ def main(argv=None):
     s.add_argument("--offline", action="store_true", help="use only cached web responses")
     s.add_argument("--top", type=int, default=3, help="candidates to print")
     s.add_argument("--json", help="also write results to this JSON file")
+    s.add_argument("--kodi", action="store_true", help="also write Kodi .nfo + poster/fanart for identified files")
+    s.add_argument("--overwrite-nfo", action="store_true", help="with --kodi: replace NFOs not written by VideoID")
 
     s = sub.add_parser("show", help="show stored result for a file (path, part of path or id)")
     s.add_argument("file")
@@ -260,6 +310,17 @@ def main(argv=None):
 
     s = sub.add_parser("export", help="export database to .json or .csv")
     s.add_argument("output")
+
+    s = sub.add_parser("kodi", aliases=["nfo"], help="write Kodi .nfo + poster/fanart next to identified files")
+    s.add_argument("paths", nargs="+", help="files, folders (everything analysed below) or database ids")
+    s.add_argument("--min-verdict", help="CERTAIN, PROBABLE (default) or POSSIBLE")
+    s.add_argument("--prefer", help="metadata source order, e.g. csfd,tmdb (default from config kodi.prefer)")
+    s.add_argument("--no-artwork", action="store_true", help="NFO only, no poster/fanart download")
+    s.add_argument("--overwrite", action="store_true",
+                   help="replace NFOs/artwork not written by VideoID (old NFO kept as .nfo.bak)")
+    s.add_argument("--refresh", action="store_true", help="re-fetch plot/genres/artwork from TMDB/CSFD")
+    s.add_argument("--dry-run", action="store_true", help="print the NFO, write nothing")
+    s.add_argument("--offline", action="store_true", help="use only cached web responses")
 
     s = sub.add_parser("config", help="show or set configuration, e.g. config tmdb_api_key XXXX")
     s.add_argument("key", nargs="?")
@@ -276,5 +337,5 @@ def main(argv=None):
         return 0
     if args.cmd in ("scan", "doctor") and not getattr(args, "offline", False):
         cfg = config.ask_keys(cfg)            # first start: ask for missing keys, skippable if non-essential
-    return {"scan": cmd_scan, "show": cmd_show, "list": cmd_list, "export": cmd_export,
+    return {"scan": cmd_scan, "kodi": cmd_kodi, "nfo": cmd_kodi, "show": cmd_show, "list": cmd_list, "export": cmd_export,
             "config": cmd_config, "doctor": cmd_doctor}[args.cmd](cfg, args)

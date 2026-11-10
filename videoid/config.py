@@ -29,6 +29,10 @@ DEFAULTS = {
     # latin (cs, de, fr, ...), en, ch (Chinese + Japanese), ko, hi (Devanagari: Hindi/Marathi/Nepali), ta, te,
     # th, ar (Arabic/Persian/Urdu), ru (East Slavic), cyrillic (bg/sr/mk), el
     "ocr": {"gpu": True, "min_confidence": 0.6, "languages": ["latin"]},
+    # Kodi metadata (videoid kodi / scan --kodi): <video>.nfo + <video>-poster.jpg / -fanart.jpg
+    #   min_verdict: write only for CERTAIN / PROBABLE / POSSIBLE matches and better
+    #   prefer: which database's plot, genres, title and artwork to use first (e.g. ["csfd", "tmdb"] for Czech)
+    "kodi": {"min_verdict": "PROBABLE", "artwork": True, "prefer": ["tmdb", "csfd"]},
     "skipped_keys": [],          # optional API keys the user chose not to enter (not asked again)
     "llm": {
         # Optional local LLM (Ollama / LM Studio / any OpenAI-compatible server) to read credits.

@@ -30,6 +30,10 @@ CREATOR_ROLE = {
 }
 
 
+def _abs_url(u):
+    return "https:" + u if isinstance(u, str) and u.startswith("//") else u
+
+
 def available():
     node = NODE if NODE.exists() else None
     return bool(node and (CSFD_DIR / "node_modules" / "node-csfd-api").exists())
@@ -147,6 +151,15 @@ class CSFD:
         for key, role in CREATOR_ROLE.items():
             for c in (m.get("creators") or {}).get(key) or []:
                 f.add_person(c.get("name"), role)
+        dates = sorted(p["date"] for p in m.get("premieres") or [] if re.fullmatch(r"\d{4}-\d\d-\d\d", p.get("date") or ""))
+        rating = m.get("rating")
+        f.set_details(
+            "csfd", title=m.get("title"), plot=next((d for d in m.get("descriptions") or [] if d), None),
+            genres=m.get("genres"), countries=m.get("origins"), tags=m.get("tags"),
+            premiered=dates[0] if dates else None,
+            rating={"value": round(rating / 10, 1), "max": 10, "votes": m.get("ratingCount")}
+            if isinstance(rating, (int, float)) else None,
+            poster=_abs_url(m.get("poster")), fanart=_abs_url(m.get("photo")))
         return f
 
     def films_by_people(self, names, min_hits=2, max_people=10):

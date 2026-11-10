@@ -4,6 +4,7 @@ from collections import Counter
 from ..film import Film
 
 BASE = "https://api.themoviedb.org/3"
+IMG = "https://image.tmdb.org/t/p/"
 JOB_ROLE = {
     "director": "director", "producer": "producer", "executive producer": "exec_producer",
     "co-producer": "producer", "original music composer": "composer", "music": "composer", "composer": "composer",
@@ -72,9 +73,23 @@ class TMDB:
         for t in (m.get("alternative_titles") or {}).get("titles", []):
             f.add_title(t.get("title"))
         cr = m.get("credits") or {}
-        for c in sorted(cr.get("cast", []), key=lambda c: c.get("order", 999)):
+        cast = sorted(cr.get("cast", []), key=lambda c: c.get("order", 999))
+        for c in cast:
             f.add_person(c.get("name"), "cast")
             f.add_alias(c.get("name"), c.get("original_name"))       # native-script name
+        f.set_details(
+            "tmdb", title=m.get("title"), originaltitle=m.get("original_title"), plot=m.get("overview"),
+            tagline=m.get("tagline"), premiered=m.get("release_date"),
+            genres=[g["name"] for g in m.get("genres") or [] if g.get("name")],
+            countries=[c["name"] for c in m.get("production_countries") or [] if c.get("name")],
+            studios=[c["name"] for c in m.get("production_companies") or [] if c.get("name")],
+            rating={"value": m.get("vote_average"), "max": 10, "votes": m.get("vote_count")}
+            if m.get("vote_count") else None,
+            poster=IMG + "original" + m["poster_path"] if m.get("poster_path") else None,
+            fanart=IMG + "original" + m["backdrop_path"] if m.get("backdrop_path") else None,
+            characters={c["name"]: c["character"] for c in cast if c.get("name") and c.get("character")},
+            thumbs={c["name"]: IMG + "h632" + c["profile_path"] for c in cast
+                    if c.get("name") and c.get("profile_path")})
         for c in cr.get("crew", []):
             f.add_person(c.get("name"), JOB_ROLE.get((c.get("job") or "").lower(), "crew"))
             f.add_alias(c.get("name"), c.get("original_name"))

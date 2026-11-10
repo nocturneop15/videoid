@@ -117,6 +117,35 @@ videoid.cmd export library.csv | library.json
 videoid.cmd config [key [value]]              # e.g. config scan.end_minutes 15
 ```
 
+## Kodi metadata
+
+```
+videoid.cmd kodi D:\Movies                 # every identified file below the folder (alias: videoid nfo)
+videoid.cmd scan D:\Movies --kodi          # identify and write in one go
+videoid.cmd kodi film.mkv --dry-run        # print the NFO only
+```
+
+For every file matched `CERTAIN` or `PROBABLE`, this writes next to the video:
+- **`<video>.nfo`** in [Kodi's movie NFO format](https://kodi.wiki/view/NFO_files/Movies). It holds the title, original title, plot, outline, tagline,
+  runtime, ratings (TMDB, ČSFD), genres, countries, studios, tags, premiere date, year, directors, writers, and
+  actors with character names and photos. It also gets `uniqueid`s for IMDb, TMDB, ČSFD and Wikidata.
+- **`<video>-poster.jpg`** and **`<video>-fanart.jpg`**.
+
+Kodi picks these up with "Local information only", or with any scraper (which uses local NFOs first).
+
+| option / config | default | |
+|---|---|---|
+| `--min-verdict` / `kodi.min_verdict` | `PROBABLE` | `CERTAIN` for stricter, `POSSIBLE` for everything |
+| `--prefer` / `kodi.prefer` | `tmdb,csfd` | which database's title, plot, genres and artwork come first; `csfd,tmdb` gives Czech metadata |
+| `--no-artwork` / `kodi.artwork` | on | skip poster and fanart downloads |
+| `--overwrite` | off | replace a `<video>.nfo` or artwork that VideoID didn't write. The old NFO is kept as `.nfo.bak`. |
+| `--refresh` | off | fetch plot, genres and artwork again from TMDB / ČSFD |
+
+- **Your files are safe:** NFOs that VideoID didn't write are never touched without `--overwrite`.
+- **No self-confirmation:** the NFOs VideoID writes carry a `created by VideoID` comment, and `scan` ignores them as evidence, so a written NFO can't confirm its own match.
+- **What's skipped:** TV episodes.
+- **Language:** without a TMDB key, the descriptive metadata comes from ČSFD and is in Czech.
+
 ## Limits
 
 - **IMDb** title pages answer scripts with an AWS WAF challenge, so IMDb is used for search and top-billed stars only.
