@@ -1,0 +1,9 @@
+onnxruntime-directml
+rapidocr
+opencv-python-headless
+numpy
+requests
+rapidfuzz
+guessit
+beautifulsoup4
+imageio-ffmpeg

@@ -1,0 +1,280 @@
+"""Command line interface."""
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+
+from . import __version__, config, log as logmod
+from .film import Film
+from .log import log
+
+
+def _ctx(cfg, args, need_ocr=True):
+    from .credits import detect_llm
+    from .db import DB
+    from .matcher import Matcher
+    from .net import Http
+    from .ocr import OCR
+    from .pipeline import Context
+
+    db = DB(config.db_path(cfg))
+    http = Http(db, cfg["cache_days"], offline=getattr(args, "offline", False))
+    llm = None
+    if need_ocr and getattr(args, "llm", None) is not False:
+        lcfg = dict(cfg["llm"])
+        if getattr(args, "llm", None) is True:
+            lcfg["enabled"] = True
+        if lcfg["enabled"] in (True, "auto"):
+            llm = detect_llm(http, lcfg)
+            if llm:
+                log(f"Local LLM: {llm['model']} @ {llm['url']}", 1)
+    return Context(cfg, db, http, Matcher(http, cfg, db), lambda: OCR(cfg["ocr"]), llm)
+
+
+def cmd_scan(cfg, args):
+    from .pipeline import describe, iter_videos, process_file
+    sc = cfg["scan"]
+    for k in ("open_minutes", "end_minutes"):
+        v = getattr(args, k)
+        if v is not None:
+            sc[k] = v
+    if args.fps:
+        sc["fps_open"] = sc["fps_end"] = args.fps
+    if args.cpu:
+        cfg["ocr"]["gpu"] = False
+    if args.lang:
+        from .ocr import resolve_languages
+        cfg["ocr"]["languages"] = [l.strip() for l in args.lang.split(",") if l.strip()]
+        resolve_languages(cfg["ocr"]["languages"])          # validate early
+    if not cfg["tmdb_api_key"]:
+        log("note: no TMDB key - credits come from Wikidata, CSFD and IMDb top stars only ('videoid keys')", 1)
+    ctx = _ctx(cfg, args, need_ocr=args.ocr)
+    results = []
+    for path in iter_videos(args.paths, cfg, recursive=not args.no_recursive):
+        try:
+            fid = process_file(ctx, path, args)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            log(f"  ERROR {path}: {e!r}", 0)
+            if logmod.VERBOSITY >= 2:
+                import traceback
+                traceback.print_exc()
+            continue
+        if fid:
+            results.append(fid)
+            print(describe(ctx.db, fid, top=args.top), flush=True)
+    if args.json:
+        Path(args.json).write_text(json.dumps([_file_record(ctx.db, f) for f in results], indent=2,
+                                              ensure_ascii=False), encoding="utf-8")
+        log(f"\nwrote {args.json}", 0)
+    return 0
+
+
+def _file_record(db, fid):
+    row = db.file_get(fid)
+    ms = db.matches(fid)
+    best = db.film_json(ms[0]["film_key"]) if ms else None
+    return {
+        "path": row["path"], "verdict": row["verdict"], "confidence": row["confidence"],
+        "film": best, "urls": Film.from_dict(best).urls() if best else {},
+        "evidence": json.loads(ms[0]["evidence_json"]) if ms else None,
+        "alternatives": [{"film_key": m["film_key"], "score": m["score"], "verdict": m["verdict"]} for m in ms[1:]],
+        "ocr_people": db.people(fid),
+        "local": json.loads(row["local_json"] or "{}"),
+    }
+
+
+def _find_file(db, ref):
+    if ref.isdigit():
+        return int(ref)
+    p = str(Path(ref).resolve())
+    r = db.con.execute("SELECT id FROM files WHERE path=?", (p,)).fetchone()
+    if not r:
+        r = db.con.execute("SELECT id FROM files WHERE path LIKE ? ORDER BY path LIMIT 1", (f"%{ref}%",)).fetchone()
+    return r["id"] if r else None
+
+
+def cmd_show(cfg, args):
+    from .db import DB
+    from .pipeline import describe
+    db = DB(config.db_path(cfg))
+    fid = _find_file(db, args.file)
+    if not fid:
+        log("not in database", 0)
+        return 1
+    print(describe(db, fid, top=args.top))
+    if args.ocr:
+        print("\n   unique OCR strings:")
+        for l in db.ocr_lines(fid):
+            print(f"    [{l['segment']:<4} {l['t']:7.1f}s x{l['seen']:<3}] {l['text']}")
+    if args.people:
+        print("\n   people read from credits:")
+        for p in sorted(db.people(fid), key=lambda p: (p["role"], p["name"])):
+            print(f"    {p['role']:<20} {p['name']}  ({p['source']}, x{p['seen']})")
+    return 0
+
+
+def cmd_list(cfg, args):
+    from .db import DB
+    db = DB(config.db_path(cfg))
+    for r in db.files():
+        if args.verdict and (r["verdict"] or "").upper() != args.verdict.upper():
+            continue
+        ids = json.loads(r["ids_json"] or "{}")
+        print(f"{r['id']:>4}  {(r['verdict'] or '-'):<9} {(r['confidence'] or 0) * 100:5.1f}%  "
+              f"{(r['title'] or '?')[:40]:<40} {r['year'] or '':<5} {ids.get('imdb', ''):<11} {r['path']}")
+    return 0
+
+
+def cmd_export(cfg, args):
+    from .db import DB
+    db = DB(config.db_path(cfg))
+    recs = [_file_record(db, r["id"]) for r in db.files() if r["matched_at"]]
+    out = Path(args.output)
+    if out.suffix.lower() == ".csv":
+        with out.open("w", newline="", encoding="utf-8-sig") as fh:
+            w = csv.writer(fh, delimiter=";")
+            w.writerow(["path", "verdict", "confidence", "title", "year", "imdb", "tmdb", "csfd", "wikidata",
+                        "director", "matched_people"])
+            for r in recs:
+                f = r["film"] or {}
+                ids = f.get("ids", {})
+                w.writerow([r["path"], r["verdict"], r["confidence"], f.get("title"), f.get("year"),
+                            ids.get("imdb"), ids.get("tmdb"), ids.get("csfd"), ids.get("wikidata"),
+                            ", ".join((f.get("credits") or {}).get("director", [])),
+                            len((r["evidence"] or {}).get("people", []))])
+    else:
+        out.write_text(json.dumps(recs, indent=2, ensure_ascii=False), encoding="utf-8")
+    log(f"exported {len(recs)} files to {out}", 0)
+    return 0
+
+
+def cmd_config(cfg, args):
+    if args.key and args.value is not None:
+        v = config.set_value(args.key, args.value)
+        print(f"{args.key} = {v!r}  (saved to {config.CONFIG_PATH})")
+        return 0
+    shown = json.loads(json.dumps(cfg))
+    if shown.get("tmdb_api_key"):
+        shown["tmdb_api_key"] = shown["tmdb_api_key"][:4] + "..."
+    if args.key:
+        node = shown
+        for part in args.key.split("."):
+            node = node[part]
+        print(json.dumps(node, indent=2, ensure_ascii=False))
+    else:
+        print(json.dumps(shown, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_doctor(cfg, args):
+    import platform
+    ok = True
+    print(f"VideoID {__version__}  Python {platform.python_version()}  {sys.executable}")
+    try:
+        from . import media
+        print(f"ffmpeg:      {media.ffmpeg_exe()}")
+    except Exception as e:
+        ok = False
+        print(f"ffmpeg:      MISSING ({e})")
+    try:
+        import onnxruntime as ort
+        print(f"onnxruntime: {ort.__version__} providers={ort.get_available_providers()}")
+    except Exception as e:
+        ok = False
+        print(f"onnxruntime: MISSING ({e})")
+    try:
+        import time
+        import numpy as np
+        from .ocr import OCR
+        o = OCR(cfg["ocr"])
+        img = np.zeros((720, 1280, 3), np.uint8)
+        import cv2
+        cv2.putText(img, "Directed by Test Person", (200, 360), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
+        o.run(img)
+        t = time.time()
+        res = o.run(img)
+        print(f"OCR:         {o.device}, {1000 * (time.time() - t):.0f} ms/frame, read: {[b['text'] for b in res]}")
+    except Exception as e:
+        ok = False
+        print(f"OCR:         FAILED ({e!r})")
+    from .credits import detect_llm
+    from .db import DB
+    from .net import Http
+    db = DB(config.db_path(cfg))
+    http = Http(db, cfg["cache_days"])
+    llm = detect_llm(http, cfg["llm"])
+    print(f"local LLM:   {llm['model'] + ' @ ' + llm['url'] if llm else 'none (optional: Ollama / LM Studio)'}")
+    print(f"TMDB key:    {'set' if cfg['tmdb_api_key'] else 'not set (optional, run: videoid keys)'}")
+    from .sources import csfd as csfd_src
+    print(f"CSFD:        {'node-csfd-api via ' + str(csfd_src.NODE) if csfd_src.available() else 'unavailable (run setup.cmd)'}")
+    n = db.con.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    nf = db.con.execute("SELECT COUNT(*) FROM films").fetchone()[0]
+    print(f"database:    {config.db_path(cfg)}  ({n} files, {nf} films)")
+    return 0 if ok else 1
+
+
+def main(argv=None):
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8", errors="replace")
+        except AttributeError:
+            pass
+    ap = argparse.ArgumentParser(prog="videoid", description="Identify movies from file names, NFOs and OCR'd credits.")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("-q", "--quiet", action="store_true")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("scan", help="analyse video files / folders")
+    s.add_argument("paths", nargs="+")
+    s.add_argument("--force", action="store_true", help="redo OCR even if stored")
+    s.add_argument("--rematch", action="store_true", help="reuse stored OCR, redo database matching")
+    s.add_argument("--reparse", action="store_true",
+                   help="re-run credits parsing on stored OCR frames (no OCR), then match")
+    s.add_argument("--no-nfo", action="store_true", help="ignore NFO files (testing credit-only identification)")
+    s.add_argument("--no-ocr", dest="ocr", action="store_false", help="only file name / NFO")
+    s.add_argument("--llm", dest="llm", action="store_true", default=None, help="force local LLM")
+    s.add_argument("--no-llm", dest="llm", action="store_false", help="disable local LLM")
+    s.add_argument("--cpu", action="store_true", help="run OCR on CPU")
+    s.add_argument("--lang", help="OCR languages, comma separated, e.g. latin,hi,ja,ko,zh,ta,te,th,ar,ru "
+                                  "(default from config ocr.languages)")
+    s.add_argument("--open", dest="open_minutes", type=float, help="minutes of opening titles to scan")
+    s.add_argument("--end", dest="end_minutes", type=float, help="minutes of end credits to scan")
+    s.add_argument("--fps", type=float, help="sampled frames per second")
+    s.add_argument("--no-recursive", action="store_true")
+    s.add_argument("--all-sizes", action="store_true", help="include samples and small files")
+    s.add_argument("--offline", action="store_true", help="use only cached web responses")
+    s.add_argument("--top", type=int, default=3, help="candidates to print")
+    s.add_argument("--json", help="also write results to this JSON file")
+
+    s = sub.add_parser("show", help="show stored result for a file (path, part of path or id)")
+    s.add_argument("file")
+    s.add_argument("--ocr", action="store_true", help="print unique OCR strings")
+    s.add_argument("--people", action="store_true", help="print people read from credits")
+    s.add_argument("--top", type=int, default=5)
+
+    s = sub.add_parser("list", help="list all files in the database")
+    s.add_argument("--verdict", help="filter: CERTAIN, PROBABLE, POSSIBLE, UNKNOWN")
+
+    s = sub.add_parser("export", help="export database to .json or .csv")
+    s.add_argument("output")
+
+    s = sub.add_parser("config", help="show or set configuration, e.g. config tmdb_api_key XXXX")
+    s.add_argument("key", nargs="?")
+    s.add_argument("value", nargs="?")
+
+    sub.add_parser("doctor", help="check ffmpeg, GPU OCR, LLM and database")
+    sub.add_parser("keys", help="enter / change API keys (also re-asks skipped ones)")
+
+    args = ap.parse_args(argv)
+    logmod.VERBOSITY = 2 if args.verbose else 0 if args.quiet else 1
+    cfg = config.load()
+    if args.cmd == "keys":
+        config.ask_keys(cfg, force=True)
+        return 0
+    if args.cmd in ("scan", "doctor") and not getattr(args, "offline", False):
+        cfg = config.ask_keys(cfg)            # first start: ask for missing keys, skippable if non-essential
+    return {"scan": cmd_scan, "show": cmd_show, "list": cmd_list, "export": cmd_export,
+            "config": cmd_config, "doctor": cmd_doctor}[args.cmd](cfg, args)
