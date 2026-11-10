@@ -76,8 +76,8 @@ One line in PowerShell:
 ```powershell
 irm https://raw.githubusercontent.com/nocturneop15/videoid/main/install.ps1 | iex
 ```
-It downloads the code to `%LOCALAPPDATA%\VideoID` (set `$env:VIDEOID_DIR` first to choose another folder),
-builds the runtime and adds `videoid` to your user PATH. Running it again updates the code and keeps your database and config.
+It asks for the installation folder (Enter = `%LOCALAPPDATA%\VideoID`; for an unattended install set `$env:VIDEOID_DIR` first),
+downloads the code, builds the runtime and adds `videoid` to your user PATH. Running it again updates the code and keeps your database and config.
 
 Or clone / download the repository and just run `videoid.cmd`. On first start it downloads everything it needs into `.\runtime`:
 embedded Python 3.13, portable Node.js LTS, node-csfd-api, the Python packages and the Latin OCR models.
