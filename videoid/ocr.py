@@ -4,12 +4,51 @@ Multi-language: text DETECTION runs once per frame (script independent); every c
 RECOGNITION model then reads the detected boxes (batched) and the best-scoring reading wins.
 """
 import logging
+import os
+import threading
 import unicodedata
 
 import numpy as np
 
 from .log import log
 from .textutil import strip_accents
+
+# ---------------------------------------------------------------------------------------------
+# Thread safety (several OCR objects run in parallel worker threads, see pipeline.OcrRunner):
+#  * one OCR object is used by ONE thread at a time - RapidOCR mutates its own state on every call
+#  * every ONNX session is created and warmed up in __init__ (RapidOCR would otherwise create the
+#    rec session lazily inside a worker; on DirectML that crashed while another session was running)
+#  * DirectML: Run() calls from several threads at once hung / crashed (Radeon 780M), so sessions
+#    of a locked OCR share one process-wide lock around the GPU call only - CPU pre/post-processing
+#    of the other workers still overlaps it. CUDA runs concurrent sessions natively.
+# ---------------------------------------------------------------------------------------------
+GPU_LOCK = threading.Lock()
+
+
+def _install_session_lock():
+    """Make OrtInferSession honour a per-session lock (sessions without one run unlocked)."""
+    from rapidocr.inference_engine.onnxruntime.main import OrtInferSession
+    if getattr(OrtInferSession, "_videoid_lockable", False):
+        return
+    OrtInferSession._videoid_run = OrtInferSession.__call__     # the real GPU call (tests wrap it)
+
+    def __call__(self, x):
+        lock = getattr(self, "_videoid_lock", None)
+        if lock is None:
+            return OrtInferSession._videoid_run(self, x)
+        with lock:
+            return OrtInferSession._videoid_run(self, x)
+
+    OrtInferSession.__call__ = __call__
+    OrtInferSession._videoid_lockable = True
+
+
+def ocr_workers(cfg, device_is_gpu=True):
+    """ocr.workers: "auto" = 2 on a GPU, 1 on CPU (the CPU engine is multi-threaded already)."""
+    w = cfg.get("workers", "auto")
+    if w in (None, "", "auto"):
+        return 2 if device_is_gpu else 1
+    return max(1, int(w))
 
 
 def _accents(s):
@@ -81,6 +120,7 @@ class OCR:
         self.langs = resolve_languages(cfg.get("languages") or ["latin"])
         providers = ort.get_available_providers()
         want_gpu = cfg.get("gpu", True)
+        workers = ocr_workers(cfg, want_gpu)
         self.device = "CPU"
         base = {
             "Global.log_level": "error",
@@ -89,6 +129,9 @@ class OCR:
             "Global.text_score": 0.0 if len(self.langs) > 1 else 0.5,
             # RapidOCR shrinks anything longer than 2000 px before detection - frames are sized by us
             "Global.max_side_len": 4096,
+            # several workers x all cores (ONNX default) would oversubscribe the CPU
+            **({"EngineConfig.onnxruntime.intra_op_num_threads": max(1, (os.cpu_count() or 2) // workers),
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1} if workers > 1 else {}),
             "Det.ocr_version": "PP-OCRv5",
             "Det.model_type": cfg.get("det_model", "server"),
             "Rec.ocr_version": "PP-OCRv5",
@@ -103,6 +146,13 @@ class OCR:
         for name in ("RapidOCR", "rapidocr"):
             logging.getLogger(name).setLevel(logging.ERROR)
         self.engines = [self._build(RapidOCR, dict(base, **{"Rec.lang_type": l})) for l in self.langs]
+        self.is_gpu = self.device != "CPU"
+        mode = str(cfg.get("gpu_lock", "auto")).lower()
+        self.gpu_lock = self.is_gpu and (mode in ("true", "1", "yes") or (mode == "auto" and "DirectML" in self.device))
+        if self.gpu_lock:
+            _install_session_lock()
+            for s in self._sessions():
+                s._videoid_lock = GPU_LOCK
         self.min_conf = cfg.get("min_confidence", 0.6)
         self.device += f", languages: {', '.join(self.langs)}, detector: {base['Det.model_type']}"
         if "latin" not in self.langs and any(l in ("en", "ch") for l in self.langs):
@@ -117,13 +167,36 @@ class OCR:
         for k in ("Det.model_type", "Rec.model_type"):
             p[k] = ModelType(p[k])
         try:
-            return cls(params=p)
+            return self._warm_up(cls(params=p))
         except Exception as e:  # GPU init can fail on exotic drivers - fall back to CPU
             if p.pop("EngineConfig.onnxruntime.use_dml", None) or p.pop("EngineConfig.onnxruntime.use_cuda", None):
                 log(f"  GPU OCR init failed ({e}); using CPU", 0)
                 self.device = "CPU"
-                return cls(params=p)
+                return self._warm_up(cls(params=p))
             raise
+
+    @staticmethod
+    def _warm_up(eng):
+        """Create every ONNX session now, in the constructing thread (RapidOCR loads them lazily)."""
+        if hasattr(eng, "_load_det_model") and hasattr(eng, "_load_rec_model"):
+            eng._load_det_model()
+            eng._load_rec_model()
+        else:   # other RapidOCR versions: a frame with text loads detection + recognition
+            import cv2
+            img = np.zeros((96, 480, 3), np.uint8)
+            cv2.putText(img, "Warm up 123", (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
+            eng(img)
+        if getattr(eng, "text_det", None) is None or getattr(eng, "text_rec", None) is None:
+            raise RuntimeError("OCR warm-up did not create all models (unsupported RapidOCR version?)")
+        return eng
+
+    def _sessions(self):
+        for eng in self.engines:
+            for part in (getattr(eng, "text_det", None), getattr(eng, "text_rec", None),
+                         getattr(eng, "text_cls", None)):
+                s = getattr(part, "session", None)
+                if s is not None:
+                    yield s
 
     @staticmethod
     def _crop(img, pts):

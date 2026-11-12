@@ -32,7 +32,11 @@ DEFAULTS = {
     # th, ar (Arabic/Persian/Urdu), ru (East Slavic), cyrillic (bg/sr/mk), el
     # det_model: server (accurate on small/thin credit text) | mobile (faster)
     # Diacritics (č ř ů ä ß ...) need the latin model - en and ch can only output plain ASCII Latin.
-    "ocr": {"gpu": True, "min_confidence": 0.6, "languages": ["latin"], "det_model": "server"},
+    # workers: parallel OCR engines - "auto" = 2 on a GPU, 1 on CPU; raise on fast GPUs (try 3-4)
+    # gpu_lock: serialize GPU calls of the workers - "auto" = on for DirectML (concurrent DirectML calls hung /
+    #   crashed on some drivers), off for CUDA; CPU work of the workers overlaps either way
+    "ocr": {"gpu": True, "min_confidence": 0.6, "languages": ["latin"], "det_model": "server",
+            "workers": "auto", "gpu_lock": "auto"},
     # Kodi metadata (videoid kodi / scan --kodi): <video>.nfo + <video>-poster.jpg / -fanart.jpg
     #   min_verdict: write only for CERTAIN / PROBABLE / POSSIBLE matches and better
     #   prefer: which database's plot, genres, title and artwork to use first (e.g. ["csfd", "tmdb"] for Czech)

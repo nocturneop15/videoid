@@ -1,6 +1,10 @@
 """Per-file pipeline: local evidence -> OCR of titles/credits -> people -> database matching -> store."""
 import json
+import queue
+import threading
 import time
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -31,15 +35,109 @@ def iter_videos(paths, cfg, recursive=True):
 class Context:
     def __init__(self, cfg, db, http, matcher, ocr_factory, llm):
         self.cfg, self.db, self.http, self.matcher = cfg, db, http, matcher
-        self._ocr_factory, self._ocr = ocr_factory, None
+        self._ocr_factory, self._engines = ocr_factory, None
         self.llm = llm
+
+    def ocr_engines(self):
+        """ocr.workers independent OCR objects (each with its own ONNX sessions). Built one after another
+        in this thread - creating sessions concurrently is not safe on DirectML."""
+        if self._engines is None:
+            from .ocr import ocr_workers
+            first = self._ocr_factory()
+            n = ocr_workers(self.cfg["ocr"], getattr(first, "is_gpu", False))
+            self._engines = [first] + [self._ocr_factory() for _ in range(n - 1)]
+            lock = " (GPU calls serialized)" if n > 1 and getattr(first, "gpu_lock", False) else ""
+            log(f"OCR engine ready on {first.device}, {n} worker(s){lock}", 1)
+        return self._engines
 
     @property
     def ocr(self):
-        if self._ocr is None:
-            self._ocr = self._ocr_factory()
-            log(f"OCR engine ready on {self._ocr.device}", 1)
-        return self._ocr
+        return self.ocr_engines()[0]
+
+
+class OcrRunner:
+    """Runs OCR on several engines in parallel threads. Each engine is checked out by exactly one thread at a
+    time; futures are returned in submission order. With one engine everything runs inline (no threads)."""
+
+    def __init__(self, engines):
+        self.engines = list(engines)
+        self.parallel = len(self.engines) > 1
+        self._pool = ThreadPoolExecutor(len(self.engines), thread_name_prefix="ocr") if self.parallel else None
+        self._free = queue.SimpleQueue()
+        for e in self.engines:
+            self._free.put(e)
+
+    def _job(self, img):
+        eng = self._free.get()
+        try:
+            return eng.run(img)
+        finally:
+            self._free.put(eng)
+
+    def submit(self, img):
+        if self._pool:
+            return self._pool.submit(self._job, img)
+        f = Future()
+        try:
+            f.set_result(self.engines[0].run(img))
+        except Exception as e:
+            f.set_exception(e)
+        return f
+
+    @property
+    def max_in_flight(self):
+        return 2 * len(self.engines)      # bounds memory: at most this many frames wait for OCR
+
+    def close(self, cancel=False):
+        """Wait for running jobs; with cancel, drop the queued ones (error / Ctrl+C)."""
+        if self._pool:
+            self._pool.shutdown(wait=True, cancel_futures=cancel)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close(cancel=exc_type is not None)
+
+
+def _prefetch(gen, size=4):
+    """Decode frames in a background thread (bounded queue), so ffmpeg works while the GPU reads.
+    Closing the returned generator stops the thread and the ffmpeg process."""
+    q, stop, end = queue.Queue(maxsize=size), threading.Event(), object()
+
+    def put(item):
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def pump():
+        try:
+            for item in gen:
+                if not put(item):
+                    break
+        except BaseException as e:          # handed to the consumer
+            put(e)
+        finally:
+            gen.close()                     # stops ffmpeg (media.frames' finally)
+            put(end)
+
+    th = threading.Thread(target=pump, daemon=True, name="decode")
+    th.start()
+    try:
+        while True:
+            item = q.get()
+            if item is end:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stop.set()
+        th.join()
 
 
 def _segments(duration, sc):
@@ -62,32 +160,62 @@ def run_ocr(ctx, path, info):
     t0 = time.time()
     stats = {"frames": 0, "ocr_frames": 0}
     out = []
-    for seg, start, length, fps in _segments(info["duration"], sc):
-        last, last_had_text = None, False
-        total = int(length * fps)
-        for t, img in media.frames(path, start, length, fps, info, sc):
+    with OcrRunner(ctx.ocr_engines()) as runner:
+        for seg, start, length, fps in _segments(info["duration"], sc):
+            frames = media.frames(path, start, length, fps, info, sc)
+            if runner.parallel:
+                frames = _prefetch(frames)
+            ocr_frames(runner, seg, frames, int(length * fps), stats, out)
+            log("", 1)
+    stats["seconds"] = round(time.time() - t0, 1)
+    log(f"  OCR: {stats['ocr_frames']} frames in {stats['seconds']}s, {len(out)} with text", 1)
+    return out, stats
+
+
+def ocr_frames(runner, seg, frames, total, stats, out):
+    """OCR one segment's (t, img) frames, appending [seg, t, boxes, weight] to out.
+
+    Frames are submitted to the runner in order and their results applied strictly in that order, so the
+    output is identical to sequential OCR: a static card that stays on screen adds weight to the last OCR'd
+    frame only if that frame turned out to have text."""
+    last = None
+    pending = deque()          # in-flight frames, oldest first: [t, future, repeats, out entry, done]
+    last_ev = None
+
+    def resolve(ev):
+        boxes = ev[1].result()             # re-raises a worker's exception here, in the main thread
+        ev[4] = True
+        if boxes:
+            ev[3] = [seg, round(ev[0], 2), boxes, 1 + ev[2]]
+            out.append(ev[3])
+
+    try:
+        for t, img in frames:
             stats["frames"] += 1
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             if gray.max() < 60:                       # black frame
                 continue
             thumb = cv2.resize(gray, (96, 54), interpolation=cv2.INTER_AREA).astype(np.int16)
             if last is not None and np.abs(thumb - last).mean() < 1.5:   # static card already read
-                if last_had_text:
-                    out[-1][3] += 1        # ...but it stays on screen longer = more evidence
+                if last_ev is not None:   # ...but it stays on screen longer = more evidence (if it has text)
+                    if not last_ev[4]:
+                        last_ev[2] += 1
+                    elif last_ev[3] is not None:
+                        last_ev[3][3] += 1
                 continue
             last = thumb
-            boxes = ctx.ocr.run(img)
+            last_ev = [t, runner.submit(img), 0, None, False]
+            pending.append(last_ev)
             stats["ocr_frames"] += 1
-            last_had_text = bool(boxes)
-            if boxes:
-                out.append([seg, round(t, 2), boxes, 1])
+            while len(pending) > runner.max_in_flight or (pending and pending[0][1].done()):
+                resolve(pending.popleft())
             if stats["frames"] % 10 == 0:
                 log(f"\r  [{seg}] frame {stats['frames']}/{total}  ocr'd {stats['ocr_frames']}  "
                     f"with text {len(out)}   ", 1, end="")
-        log("", 1)
-    stats["seconds"] = round(time.time() - t0, 1)
-    log(f"  OCR: {stats['ocr_frames']} frames in {stats['seconds']}s, {len(out)} with text", 1)
-    return out, stats
+        while pending:
+            resolve(pending.popleft())
+    finally:
+        frames.close()                     # stop decoding / ffmpeg on errors and Ctrl+C too
 
 
 def parse_frames(ctx, frames, stats=None):

@@ -70,6 +70,19 @@ videoid.cmd config scan.max_width 1600
 ```
 Each file reports its total time and OCR time.
 
+### Parallel OCR (faster GPUs)
+
+`ocr.workers` runs several OCR engines in parallel (`auto` = 2 on a GPU, 1 on CPU) while frames are decoded
+in the background. Results are applied in frame order, so the output matches a single worker.
+On DirectML, the workers' GPU calls are serialized by default (`ocr.gpu_lock: auto`), because concurrent
+DirectML calls hung or crashed on some drivers. Their CPU work still overlaps, which is where a fast GPU
+otherwise sits idle. CUDA runs them concurrently. To find the best setting for a GPU (it also checks correctness):
+```
+runtime\python\python.exe tests\test_parallel_ocr.py --video D:\Movies\film.mkv --workers 1,2,3,4
+videoid.cmd config ocr.workers 3
+videoid.cmd config ocr.gpu_lock false     # only if the test passes with it; a driver crash ends the process
+```
+
 ## API keys
 
 On first start, `scan` and `doctor` ask for any missing API keys. Optional keys can be skipped with Enter and are not asked again.
