@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, config, log as logmod
+from . import __version__, config, log as logmod, ui
 from .film import Film
 from .log import log
 
@@ -70,24 +70,39 @@ def cmd_scan(cfg, args):
         cfg["ocr"]["languages"] = [l.strip() for l in args.lang.split(",") if l.strip()]
         resolve_languages(cfg["ocr"]["languages"])          # validate early
     if not cfg["tmdb_api_key"]:
-        log("note: no TMDB key - credits come from Wikidata, CSFD and IMDb top stars only ('videoid keys')", 1)
+        log(ui.warn("no TMDB key - cast and crew come from Wikidata, ČSFD and IMDb's top stars only "
+                    "('videoid keys' adds one)"), 1)
     ctx = _ctx(cfg, args, need_ocr=args.ocr)
-    results = []
+    results, errors = [], 0
     write_logs = args.log_file and sc.get("log_file", True)
-    for path in iter_videos(args.paths, cfg, recursive=not args.no_recursive):
+    files = list(iter_videos(args.paths, cfg, recursive=not args.no_recursive))
+    if len(files) > 1:
+        log(ui.c(f"{len(files)} video files to check", ui.BOLD), 0)
+    for i, path in enumerate(files, 1):
+        ctx.position = (i, len(files))
         with logmod.capture() as lines:
             fid, worth_logging = _scan_one(ctx, cfg, path, args, describe, process_file)
         if fid:
             results.append(fid)
+        elif worth_logging:
+            errors += 1
         if write_logs and worth_logging:
             from .filing import write_log
             write_log(Path(ctx.db.file_get(fid)["path"]) if fid else path, lines)   # follows a rename
-    if len(results) > 1:
-        log(f"\n{len(results)} files in {fmt_duration(time.time() - t_all)}", 0)
+    if len(results) + errors > 1:
+        v = [ctx.db.file_get(f)["verdict"] for f in results]
+        sure = sum(x == "CERTAIN" for x in v)
+        unsure = sum(x in ("PROBABLE", "POSSIBLE") for x in v)
+        parts = [ui.c(f"{sure} identified", ui.GREEN), ui.c(f"{unsure} not sure", ui.YELLOW),
+                 ui.c(f"{len(v) - sure - unsure} not identified", ui.RED)]
+        if errors:
+            parts.append(ui.c(f"{errors} failed", ui.BOLD + ui.RED))
+        log("\n" + ui.c(f"=== {len(results) + errors} files in {fmt_duration(time.time() - t_all)}: ", ui.BOLD)
+            + ", ".join(parts), 0)
     if args.json:
         Path(args.json).write_text(json.dumps([_file_record(ctx.db, f) for f in results], indent=2,
                                               ensure_ascii=False), encoding="utf-8")
-        log(f"\nwrote {args.json}", 0)
+        log(ui.good(f"wrote {args.json}"), 0)
     return 0
 
 
@@ -100,7 +115,7 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
     except KeyboardInterrupt:
         raise
     except Exception as e:
-        log(f"  ERROR {path}: {e!r}", 0)
+        log(ui.bad(f"{path}: {e!r}"), 0)
         if logmod.VERBOSITY >= 2:
             import traceback
             traceback.print_exc()
@@ -114,12 +129,12 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
     if args.rename:
         from .filing import rename_movie
         new, status = rename_movie(ctx.db, fid, ctx.matcher, cfg["rename"], cfg["kodi"].get("prefer"))
-        logmod.out("   rename: " + status)
+        logmod.out(ui.status("rename", status))
         changed = changed or new is not None
     if args.kodi:
         from .kodi import write_for_file
         status = write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"], overwrite=args.overwrite_nfo)
-        logmod.out("   kodi: " + status)
+        logmod.out(ui.status("kodi", status))
         changed = changed or status.startswith("wrote")
     return fid, changed
 
@@ -136,7 +151,7 @@ def _ask_match(db, fid, limit=6):
         return False
     row = db.file_get(fid)
     file_min = f", file {row['duration'] / 60:.0f} min" if row["duration"] else ""
-    logmod.out(f"\n   Not sure{file_min}. " + ("Which film is it?" if len(ms) > 1 else "Is it this film?"))
+    logmod.out(ui.question(f"Not sure{file_min}. " + ("Which film is it?" if len(ms) > 1 else "Is it this film?")))
     ms = ms[:limit]
     for i, m in enumerate(ms, 1):
         f = Film.from_dict(db.film_json(m["film_key"]) or {})
@@ -144,29 +159,31 @@ def _ask_match(db, fid, limit=6):
         aka = [t for t in f.titles if t != f.title][:2]
         bits = [f"{f.runtime} min" if f.runtime else None, (lambda n: f"{n} {'person' if n == 1 else 'people'} matched")(len(ev.get("people") or [])),
                 ("also " + " / ".join(aka)) if aka else None]
-        logmod.out(f"    {i}) {f.title} ({f.year or '?'})  [{m['verdict']}]  " + ", ".join(b for b in bits if b))
+        logmod.out(ui.option(i, ui.c(f"{f.title} ({f.year or '?'})", ui.BOLD + ui.WHITE)) + "  "
+                   + ui.verdict(m["verdict"]) + "  " + ", ".join(b for b in bits if b))
         for k in ("imdb", "csfd", "tmdb"):
             if k in f.urls():
-                logmod.out(f"         {f.urls()[k]}")
+                logmod.out("        " + ui.c(f.urls()[k], ui.BLUE))
     while True:
         try:
             pick = "1 = yes, 0 = no" if len(ms) == 1 else f"1-{len(ms)} = this film, 0 = none of these"
-            ans = input(f"   {pick}, Enter = leave as it is: ").strip()
+            prompt = ui.ask(f"{pick}, Enter = leave as it is:")
+            ans = input(prompt if ui.color_on(sys.stdout) else ui.plain(prompt)).strip()
         except EOFError:
             ans = ""
         if ans == "":
-            logmod.out("   left as it is")
+            logmod.out(ui.warn("left as it is"))
             return False
         if ans.isdigit() and 0 <= int(ans) <= len(ms):
             break
-        print(f"   type a number from 0 to {len(ms)}, or press Enter")
+        logmod.log(ui.warn(f"type a number from 0 to {len(ms)}, or press Enter"), 0)
     if ans == "0":
         db.choose_match(fid, None)
-        logmod.out("   you chose: none of these - marked UNKNOWN")
+        logmod.out(ui.warn("you chose: none of these - marked UNKNOWN"))
         return True
     pick = db.choose_match(fid, int(ans) - 1)
     f = db.film_json(pick["film_key"]) or {}
-    logmod.out(f"   you chose: {f.get('title')} ({f.get('year') or '?'}) - now CERTAIN")
+    logmod.out(ui.good(f"you chose: {f.get('title')} ({f.get('year') or '?'}) - now CERTAIN"))
     return True
 
 
@@ -202,7 +219,7 @@ def cmd_show(cfg, args):
     if not fid:
         log("not in database", 0)
         return 1
-    print(describe(db, fid, top=args.top))
+    logmod.out(describe(db, fid, top=args.top))
     if args.ocr:
         print("\n   unique OCR strings:")
         for l in db.ocr_lines(fid):

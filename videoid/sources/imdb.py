@@ -6,6 +6,7 @@ from urllib.parse import quote
 from bs4 import BeautifulSoup
 
 from ..film import Film
+from .. import ui
 from ..log import log
 
 SECTION_ROLE = {
@@ -51,7 +52,7 @@ class IMDb:
         if not html:
             if not self.http.offline:
                 self.pages_blocked = True
-                log("  IMDb title pages not accessible to scripts - using IMDb search + ids only", 1)
+                log(ui.detail("(IMDb title pages are not accessible to scripts - using IMDb search and ids only)"), 1)
             return None
         f = Film(ids={"imdb": tt}, source="imdb")
         soup = BeautifulSoup(html, "html.parser")

@@ -163,6 +163,16 @@ To make it permanent: `videoid config ocr.languages "[\"latin\", \"ru\"]"`.
    [POSSIBLE  24.1%  score   13.1]  Nadměrné maličkosti (?)  27 min
 ```
 
+Each result starts with a coloured label: **IDENTIFIED** (green, CERTAIN), **NOT SURE** (yellow,
+PROBABLE or POSSIBLE) or **NOT IDENTIFIED** (red). While a film is being checked, lines starting with `>`
+say what VideoID is doing right now (reading the end credits, searching the databases, …), with a progress
+bar and the time left while it reads the screen. Questions from `--interactive` stand out on a yellow bar.
+A run over several files ends with a summary: how many were identified, not sure, not identified or failed.
+
+Colours work in Windows Terminal and the standard Windows 10/11 console. They're left out automatically
+when the output goes to a file, and the log files next to the films never contain them. To turn colours
+off, set the environment variable `NO_COLOR=1`.
+
 The verdict in brackets says how sure VideoID is:
 
 | verdict | meaning | what to do |

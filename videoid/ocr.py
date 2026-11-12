@@ -139,7 +139,7 @@ def _recognition_faster_on_cpu(eng, cpu_rec, key):
     # CPU wins ties: it frees the GPU for detection and overlaps it across workers
     _REC_CHOICE[key] = c <= g * 1.15
     log(f"  text recognition on {'CPU' if _REC_CHOICE[key] else 'GPU'} "
-        f"(12 lines: GPU {g * 1000:.0f} ms, CPU {c * 1000:.0f} ms)", 1)
+        f"(12 lines: GPU {g * 1000:.0f} ms, CPU {c * 1000:.0f} ms)", 2)      # the engine line says where
     return _REC_CHOICE[key]
 
 

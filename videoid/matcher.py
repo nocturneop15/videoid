@@ -5,7 +5,12 @@ from rapidfuzz import fuzz, process
 
 from .credits import ROLE_PRIORITY, is_verified_name
 from .film import Film, merge_all
+from . import ui
 from .log import log
+
+NICE = {"wikidata": "Wikidata", "tmdb": "TMDB", "imdb": "IMDb", "csfd": "ČSFD"}
+SOURCE_TEXT = {"filename": "from the file name", "folder": "from the folder name", "nfo": "from the NFO",
+               "embedded": "from the file's metadata", "ocr": "read on screen"}
 from .sources.csfd import CSFD
 from .sources.imdb import IMDb
 from .sources.tmdb import TMDB
@@ -33,9 +38,11 @@ class Matcher:
     def identify(self, ev):
         """ev: dict(titles=[(t,src)], years=[(y,src)], ids={}, people=[{name,role,..}], runtime=min)"""
         cands = self._candidates(ev)
-        log(f"  {len(cands)} candidate films", 1)
         if not cands:
+            log(ui.warn("no candidate films found in any database"), 1)
             return []
+        log(ui.step(f"Comparing {len(cands)} candidate films: fetching their full cast and crew and "
+                    f"scoring each against everything found ..."), 1)
         cands = self._enrich(cands, ev)
         ranked = self._rank(cands, ev)
         if ranked:
@@ -87,12 +94,13 @@ class Matcher:
         ids = ev.get("ids") or {}
         # 1) explicit ids from NFO
         if ids:
-            log(f"  NFO ids: {ids}", 1)
+            log(ui.step("Looking up the film the NFO names: " + ", ".join(f"{k} {v}" for k, v in ids.items())), 1)
             films.append(Film(ids=ids, source="nfo"))
         year = self._best_year(ev)
         # 2) title searches
         for q, src in self._queries(ev):
-            log(f"  searching title '{q}' ({src})", 1)
+            srcs = [NICE.get(s.name, s.name) for s in (self.wd, self.tmdb, self.imdb, self.csfd) if s]
+            log(ui.step(f"Searching {', '.join(srcs)} for the title '{q}' ({SOURCE_TEXT.get(src, src)})"), 1)
             for s in (self.wd, self.tmdb, self.imdb, self.csfd):
                 if not s:
                     continue
@@ -102,11 +110,12 @@ class Matcher:
                     else:
                         films += s.search(q, year)
                 except Exception as e:  # one broken source must not stop the others
-                    log(f"    {s.name} search failed: {e}", 1)
+                    log(ui.warn(f"{s.name} search failed: {e}"), 1)
         # 3) reverse lookup: films shared by the people seen in the credits
         names = self._key_people(ev)
         if len(names) >= 2:
-            log(f"  reverse lookup by {len(names)} people: {', '.join(names[:6])}...", 1)
+            log(ui.step(f"Looking for films that {len(names)} people from the credits worked on together: "
+                        f"{', '.join(names[:6])}{', ...' if len(names) > 6 else ''}"), 1)
             if self.wd:
                 try:
                     for q, n in self.wd.films_by_people(names):

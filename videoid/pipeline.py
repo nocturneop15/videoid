@@ -15,6 +15,7 @@ from .credits import CreditCollector, llm_extract
 from .db import now
 from .film import Film
 from .textutil import title_sim
+from . import ui
 from .log import log
 
 
@@ -45,6 +46,7 @@ class Context:
         in this thread - creating sessions concurrently is not safe on DirectML."""
         if self._engines is None:
             from .ocr import ocr_workers
+            log(ui.step("Starting the text recognition (OCR) engine - loads the models once per run ..."), 1)
             first = self._ocr_factory()
             n = ocr_workers(self.cfg["ocr"], getattr(first, "is_gpu", False))
             share = getattr(first, "shares_sessions", False)
@@ -52,7 +54,7 @@ class Context:
             self._engines = [first] + [first.clone() if share else self._ocr_factory() for _ in range(n - 1)]
             how = (", shared GPU sessions, GPU calls serialized" if share else
                    ", GPU calls serialized" if getattr(first, "gpu_lock", False) else "") if n > 1 else ""
-            log(f"OCR engine ready on {first.device}, {n} worker(s){how}", 1)
+            log(ui.detail(f"OCR engine ready: {first.device}, {n} worker(s){how}"), 1)
         return self._engines
 
     @property
@@ -168,17 +170,29 @@ def run_ocr(ctx, path, info, segments=None):
     out = []
     with OcrRunner(ctx.ocr_engines()) as runner:
         for seg, start, length, fps in segments or _segments(info["duration"], sc):
+            what = "opening titles" if seg == "open" else "end credits"
+            rate = f"1 frame/s" if fps >= 0.999 else f"1 frame every {1 / fps:g} s"
+            if fps > 1.001:
+                rate = f"{fps:g} frames/s"
+            log(ui.step(f"Reading the {what} with OCR: {_clock(start)}-{_clock(start + length)} of the film, "
+                        f"{rate}"), 1)
             frames = media.frames(path, start, length, fps, info, sc)
             if runner.parallel:
                 frames = _prefetch(frames)
             ocr_frames(runner, seg, frames, int(length * fps), stats, out)
-            log("", 1)
     stats["seconds"] = round(time.time() - t0, 1)
     for k in ("decode_wait", "ocr_wait"):
         stats[k] = round(stats.get(k, 0.0), 1)
-    log(f"  OCR: {stats['ocr_frames']} frames in {stats['seconds']}s, {len(out)} with text "
-        f"(waited {stats['decode_wait']}s for decoding, {stats['ocr_wait']}s for OCR)", 1)
+    log(ui.detail(f"text found on {len(out)} of {stats['ocr_frames']} frames read, "
+                  f"in {fmt_duration(stats['seconds'])}"), 1)
+    log(ui.detail(f"(skipped {stats['frames'] - stats['ocr_frames']} black or unchanged frames; waited "
+                  f"{stats['decode_wait']}s for decoding, {stats['ocr_wait']}s for OCR)"), 2)
     return out, stats
+
+
+def _clock(seconds):
+    s = int(seconds)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
 
 
 def ocr_frames(runner, seg, frames, total, stats, out):
@@ -201,6 +215,19 @@ def ocr_frames(runner, seg, frames, total, stats, out):
     stats.setdefault("decode_wait", 0.0)
     stats.setdefault("ocr_wait", 0.0)
     clock = time.perf_counter
+    seg_start, frames0, text0 = clock(), stats["frames"], len(out)
+
+    def progress(done=False):
+        n = stats["frames"] - frames0
+        bar_w = 24
+        fill = min(bar_w, int(bar_w * n / max(1, total)))
+        bar = ui.c("#" * fill, ui.CYAN) + ui.c("." * (bar_w - fill), ui.DIM)
+        tail = "done" if done else ""
+        if not done and n:
+            left = (clock() - seg_start) / n * max(0, total - n)
+            tail = f"about {fmt_duration(left)} left"
+        log(f"\r    [{bar}] {min(n, total)}/{total} frames, text on {len(out) - text0}  {tail}     ", 1,
+            end="\n" if done else "")
     it = iter(frames)
     try:
         while True:
@@ -232,12 +259,12 @@ def ocr_frames(runner, seg, frames, total, stats, out):
                 resolve(pending.popleft())
             stats["ocr_wait"] += clock() - t0                     # time the main thread waited for OCR
             if stats["frames"] % 10 == 0:
-                log(f"\r  [{seg}] frame {stats['frames']}/{total}  ocr'd {stats['ocr_frames']}  "
-                    f"with text {len(out)}   ", 1, end="")
+                progress()
         t0 = clock()
         while pending:
             resolve(pending.popleft())
         stats["ocr_wait"] += clock() - t0
+        progress(done=True)
     finally:
         frames.close()                     # stop decoding / ffmpeg on errors and Ctrl+C too
 
@@ -253,9 +280,9 @@ def parse_frames(ctx, frames, stats=None):
     meta = col.meta()
     if stats:
         meta["stats"] = stats
-    log(f"  credits: {len(lines)} unique strings -> {len(people)} people", 1)
+    log(ui.step(f"Finding names and roles in the text: {len(lines)} different lines -> {len(people)} people"), 1)
     if ctx.llm and lines:
-        log(f"  LLM ({ctx.llm['model']}) reading {len(lines)} unique strings ...", 1)
+        log(ui.step(f"Local AI ({ctx.llm['model']}) reading the {len(lines)} lines for more names ..."), 1)
         lp, lt, ly = llm_extract(ctx.http, ctx.llm, lines)
         people += lp
         if lt:
@@ -263,7 +290,7 @@ def parse_frames(ctx, frames, stats=None):
         if ly and isinstance(ly, int):
             meta["copyright_years"].insert(0, ly)
         meta["llm"] = ctx.llm["model"]
-        log(f"  LLM: {len(lp)} people", 1)
+        log(ui.detail(f"the local AI found {len(lp)} people"), 1)
     return lines, people, meta
 
 
@@ -296,21 +323,29 @@ def process_file(ctx, path, opts):
     h = localinfo.oshash(path)
     row = db.file_lookup(str(path), st.st_size, h)
     unchanged = row is not None and row["size"] == st.st_size
+    index, total = getattr(ctx, "position", (None, None))
+    log(ui.header(path.name, index, total), 0)
+    log(ui.detail(f"in {path.parent}"), 1)
     if unchanged and row["matched_at"] and not (opts.force or opts.rematch or opts.reparse):
-        log(f"\n== {path}  (cached, use --rematch / --reparse / --force to redo)", 0)
+        log(ui.detail("already identified - showing the stored result (--rematch / --reparse / --force redo it)"), 0)
         ctx.cached = True
         return row["id"]
 
-    log(f"\n== {path}", 0)
     t_start = time.time()
+    log(ui.step("Reading the file name, folder name, NFO and the file's own metadata"), 1)
     info = media.probe(path)
     local = localinfo.gather(path, info)
     if opts.no_nfo:      # testing: identify from name + credits only
         local.update(ids={}, people=[], nfo_files=[])
         local["titles"] = [t for t in local["titles"] if t[1] != "nfo"]
         local["years"] = [y for y in local["years"] if y[1] != "nfo"]
-    log(f"  local: titles={[t for t, _ in local['titles']]} years={[y for y, _ in local['years']]} "
-        f"ids={local['ids']}" + (f" nfo={len(local['nfo_files'])}" if local["nfo_files"] else ""), 1)
+    got = [f"titles {', '.join(repr(t) for t, _ in local['titles']) or '-'}",
+           f"years {', '.join(str(y) for y, _ in local['years']) or '-'}"]
+    if info.get("duration"):
+        got.append(f"length {fmt_duration(info['duration'])}")
+    if local["nfo_files"]:
+        got.append(f"NFO with {', '.join(f'{k} {v}' for k, v in local['ids'].items()) or 'no ids'}")
+    log(ui.detail("found: " + "; ".join(got)), 1)
     fid = db.file_upsert(str(path), size=st.st_size, mtime=st.st_mtime, oshash=h, duration=info["duration"],
                          width=info["width"], height=info["height"], local_json=json.dumps(local, ensure_ascii=False))
 
@@ -318,14 +353,14 @@ def process_file(ctx, path, opts):
     if opts.ocr:
         stored = db.frames(fid) if unchanged and row["ocr_done"] and not opts.force else []
         if stored and opts.reparse:
-            log(f"  re-parsing {len(stored)} stored OCR frames", 1)
+            log(ui.step(f"Reading names again from the {len(stored)} frames of text stored by an earlier scan"), 1)
             old = json.loads(row["ocr_meta_json"] or "{}")
             lines, people, meta = parse_frames(ctx, stored, old.get("stats"))
             db.save_ocr(fid, lines, people, meta)
         elif unchanged and row["ocr_done"] and not opts.force and not opts.reparse:
             people = [p for p in db.people(fid) if p["source"] in ("ocr", "llm")]
             meta = json.loads(row["ocr_meta_json"] or "{}")
-            log(f"  reusing stored OCR: {len(people)} people", 1)
+            log(ui.step(f"Reusing the credits read in an earlier scan: {len(people)} people"), 1)
         else:
             ranked = quick_nfo_check(ctx, path, info, local, fid, opts)
             if ranked is None:
@@ -351,8 +386,8 @@ def process_file(ctx, path, opts):
         db.file_upsert(str(path), matched_at=now(), film_key=None, title=None, year=None, verdict="UNKNOWN",
                        confidence=0, ids_json="{}")
     ocr_s = (meta.get("stats") or {}).get("seconds") if opts.ocr else None
-    log(f"  total time: {fmt_duration(time.time() - t_start)}"
-        + (f" (OCR {fmt_duration(ocr_s)})" if ocr_s else ""), 0)
+    log(ui.detail(f"finished in {fmt_duration(time.time() - t_start)}"
+                  + (f" (reading text {fmt_duration(ocr_s)})" if ocr_s else "")), 0)
     return fid
 
 
@@ -371,13 +406,14 @@ def quick_nfo_check(ctx, path, info, local, fid, opts):
     if not end:
         return None
     seg, start, length, _ = end[0]
-    log(f"  NFO found - quick check: end credits only, one frame every {every:g} s", 0)
+    log(ui.step(f"An NFO names the film - checking it quickly against the end credits "
+                f"(one frame every {every:g} s) instead of the full scan"), 0)
     frames, stats = run_ocr(ctx, path, info, [(seg, start, length, 1.0 / every)])
     lines, people, meta = parse_frames(ctx, frames, stats)
     need = int(sc.get("nfo_check_people", 3))
     why = f"only {len(people)} people read from the credits"
     if len(people) >= need:
-        log("  identifying from the credits alone:", 1)
+        log(ui.step("Identifying the film from the credits alone, ignoring the NFO and the file name"), 1)
         blank = {"titles": [], "years": [], "ids": {}, "people": []}
         alone = ctx.matcher.identify(build_evidence(blank, info, people, meta))
         if not alone:
@@ -396,43 +432,49 @@ def quick_nfo_check(ctx, path, info, local, fid, opts):
             else:
                 ranked = ctx.matcher.identify(build_evidence(local, info, people, meta))
                 if ranked and ranked[0]["film_key"] == b["film_key"]:
-                    log(f"  NFO verified: the end credits alone identify {name} ({n} people, {b['verdict']})", 0)
+                    log(ui.good(f"NFO verified: the end credits alone identify {name} "
+                                f"({n} people, {b['verdict']})"), 0)
                     meta["nfo_verified"] = True
                     ctx.db.save_frames(fid, frames)
                     ctx.db.save_ocr(fid, lines, people, meta)
                     return ranked
                 why = "NFO and credits together point elsewhere"
-    log(f"  NFO NOT verified ({why}) - full scan", 0)
+    log(ui.warn(f"NFO NOT verified ({why}) - doing the full scan"), 0)
     return None
 
 
 def fmt_duration(s):
     s = int(round(s))
+    if s < 60:
+        return f"{s}s"
     return f"{s // 3600}h {s % 3600 // 60:02d}m {s % 60:02d}s" if s >= 3600 else f"{s // 60}m {s % 60:02d}s"
 
 
 def describe(db, fid, top=3, show_people=True):
     row = db.file_get(fid)
-    out = [f"\n>> {row['path']}"]
     ms = db.matches(fid)
+    out = ["", ui.result_badge(row["verdict"] if ms else "UNKNOWN") + " " + ui.c(row["path"], ui.BOLD)]
     if not ms:
-        out.append("   no match found")
+        out.append(ui.c("   no matching film found", ui.RED))
         return "\n".join(out)
     if row["verdict"] == "UNKNOWN":
-        out.append("   you marked these candidates as wrong (--interactive): UNKNOWN")
+        out.append(ui.c("   you marked these candidates as wrong (--interactive)", ui.RED))
     for m in ms[:top]:
         fj = db.film_json(m["film_key"]) or {}
         f = Film.from_dict(fj)
         ev = json.loads(m["evidence_json"])
-        star = "*" if m["rank"] == 0 else " "
-        out.append(f" {star} [{m['verdict']:<8} {m['confidence'] * 100:5.1f}%  score {m['score']:6.1f}]  "
-                   f"{f.title} ({f.year or '?'})" + (f"  {f.runtime} min" if f.runtime else ""))
+        first = m["rank"] == 0
+        name = f"{f.title} ({f.year or '?'})"
+        out.append((ui.c(" * ", ui.BOLD) if first else "   ")
+                   + f"[{ui.verdict(m['verdict'], 8)} {m['confidence'] * 100:5.1f}%  score {m['score']:6.1f}]  "
+                   + (ui.c(name, ui.BOLD + ui.WHITE) if first else ui.c(name, ui.DIM))
+                   + (f"  {f.runtime} min" if f.runtime else ""))
         if m["rank"] == 0:
             orig = [t for t in f.titles if t != f.title][:3]
             if orig:
                 out.append(f"      also known as: {' / '.join(orig)}")
             for k, u in f.urls().items():
-                out.append(f"      {k:<9} {u}")
+                out.append(f"      {k:<9} " + ui.c(u, ui.BLUE))
             if show_people and ev["people"]:
                 out.append(f"      matched {len(ev['people'])} people:")
                 for p in ev["people"][:25]:
@@ -449,7 +491,7 @@ def describe(db, fid, top=3, show_people=True):
             if ev.get("runtime"):
                 bits.append(f"runtime diff {ev['runtime']['diff']} min")
             if bits:
-                out.append("      evidence: " + "; ".join(bits))
+                out.append(ui.c("      evidence: " + "; ".join(bits), ui.DIM))
             for w in ev.get("warnings") or []:
-                out.append(f"      WARNING: {w}")
+                out.append("      " + ui.badge("WARNING", ui.ON_YELLOW) + " " + ui.c(w, ui.YELLOW))
     return "\n".join(out)
