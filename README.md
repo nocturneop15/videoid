@@ -1,5 +1,7 @@
 # VideoID
 
+**New here? Read the [user manual](MANUAL.md)**: installing, identifying films, Kodi, renaming, settings, troubleshooting.
+
 Portable tool that identifies movie files. It combines several sources of evidence:
 
 1. **File and folder name** (parsed with guessit: title, year, release junk removed)
