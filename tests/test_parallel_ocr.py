@@ -247,13 +247,16 @@ def child(spec):
         "shared": bool(len(engines) > 1 and engines[1].engines[0].text_det.session is
                        first.engines[0].text_det.session),
         "device": first.device.split(",")[0], "mem_before": mem0, "mem_after_init": mem1,
-        "clean": "ffmpeg" not in left.lower() and not ocr_threads(), "out": out}, ensure_ascii=False), flush=True)
+        # ASCII JSON: OCR text (e.g. "√") must survive a cp1250 console when Python runs without UTF-8 mode
+        "clean": "ffmpeg" not in left.lower() and not ocr_threads(), "out": out}, ensure_ascii=True), flush=True)
 
 
 def run_child(spec):
     import json
-    r = subprocess.run([sys.executable, "-X", "faulthandler", __file__, "--child", json.dumps(spec)],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT))
+    import os
+    r = subprocess.run([sys.executable, "-X", "faulthandler", "-X", "utf8", __file__, "--child", json.dumps(spec)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT),
+                       env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8"))
     line = next((l for l in r.stdout.splitlines() if l.startswith("RESULT ")), None)
     if line is None:
         tail = (r.stderr or r.stdout).strip().splitlines()[-6:]
