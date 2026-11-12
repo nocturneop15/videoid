@@ -7,7 +7,7 @@ Portable tool that identifies movie files. It combines several sources of eviden
 1. **File and folder name** (parsed with guessit: title, year, release junk removed)
 2. **NFO files** in the same folder (Kodi XML or scene NFO): IMDb, TMDB and ČSFD links, title, year and people
 3. **Container metadata** (embedded title tag) and **runtime**
-4. **OCR of the opening titles and end credits**. It reads the first 6 and last 12 minutes and samples 1 frame/s.
+4. **OCR of the opening titles and end credits**. It reads the first 6 and last 12 minutes and samples one frame every 2 s (`--fps 1` for every second).
    Black frames and repeated static frames are skipped. Only unique strings are kept.
 5. **Credits parsing**. Role headers in ~10 languages (EN/CZ/SK/DE/FR/IT/ES/PL/HU), e.g. "Directed by", "Režie",
    "Hudba", "Kamera", "Hrají", become director, producer, composer, writer, DoP, editor,
@@ -137,7 +137,7 @@ videoid.cmd D:\Movies --kodi                  # "scan" is the default command
 videoid.cmd scan D:\Movies\film.mkv --force   # redo OCR
 videoid.cmd scan D:\Movies --rematch          # reuse stored OCR, query databases again
 videoid.cmd scan D:\Movies --no-ocr           # file name + NFO only (fast)
-videoid.cmd scan X --end 15 --open 10 --fps 2 # scan more of the film
+videoid.cmd scan X --end 15 --open 10 --fps 1 # scan more of the film, every second
 videoid.cmd scan X --json result.json
 videoid.cmd scan D:\Movies --rename           # rename identified movies to "Title (Year)"
 videoid.cmd scan D:\Movies -i                 # --interactive: ask which film it is when not CERTAIN

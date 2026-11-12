@@ -96,12 +96,12 @@ Put paths with spaces in quotes. In PowerShell, single quotes work too: `'X:\Dok
 2. If the film has text subtitles, the characters' names in the dialogue are checked first. That can
    identify it in seconds, without reading the screen (see [Subtitles](#subtitles-the-fastest-way)).
 3. If an NFO is there, a quick check runs next (see [section 7](#7-films-that-already-have-an-nfo)).
-4. Otherwise, the first 6 and last 12 minutes are scanned, one frame per second, and all text is read.
+4. Otherwise, the first 6 and last 12 minutes are scanned, one frame every 2 seconds, and all text is read.
 5. The names found (director, actors, crew) are looked up in the film databases.
 6. The best match is printed and saved.
 
-Expect roughly **3-6 minutes per film** on a mid-range graphics card. On a laptop with integrated
-graphics it can take 10-20 minutes. Each film shows its own time at the end.
+Expect roughly **2-4 minutes per film** on a mid-range graphics card. On a laptop with integrated
+graphics it can take 5-10 minutes. Each film shows its own time at the end.
 
 Films that were already identified are skipped on the next run, so you can stop with **Ctrl+C** and
 continue later. Files under 50 MB and files with "sample" in the name are skipped.
@@ -119,6 +119,7 @@ continue later. Files under 50 MB and files with "sample" in the name are skippe
 | `videoid D:\Movies --no-ocr` | use only file names and NFOs (very fast, less reliable) |
 | `videoid film.mkv --end 20` | scan the last 20 minutes instead of 12 (long end credits) |
 | `videoid film.mkv --open 10` | scan the first 10 minutes instead of 6 |
+| `videoid film.mkv --fps 1` | read a frame every second instead of every 2 seconds (slower, for very fast credits) |
 | `videoid D:\Movies --lang latin,ja` | also read Japanese (see [Languages](#languages)) |
 | `videoid D:\Movies --no-quick` | always scan fully, even when an NFO exists |
 | `videoid D:\Movies --no-subs` | don't try the subtitles first |

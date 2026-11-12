@@ -401,7 +401,7 @@ def main(argv=None):
                                   "(default from config ocr.languages)")
     s.add_argument("--open", dest="open_minutes", type=float, help="minutes of opening titles to scan")
     s.add_argument("--end", dest="end_minutes", type=float, help="minutes of end credits to scan")
-    s.add_argument("--fps", type=float, help="sampled frames per second")
+    s.add_argument("--fps", type=float, help="frames read per second (default 0.5 = one every 2 s; 1 for very fast credits)")
     s.add_argument("--no-recursive", action="store_true")
     s.add_argument("--all-sizes", action="store_true", help="include samples and small files")
     s.add_argument("--offline", action="store_true", help="use only cached web responses")
