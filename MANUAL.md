@@ -168,7 +168,7 @@ The verdict in brackets says how sure VideoID is:
 | verdict | meaning | what to do |
 |---|---|---|
 | **CERTAIN** | many people from the credits match (e.g. the director and 2 more, or 5+ people), clearly more than any other film | nothing, it's right |
-| **PROBABLE** | a good match, but with less evidence | usually right; glance at it |
+| **PROBABLE** | a good match, but with less evidence | usually right; confirm it with `--interactive` to get Kodi files |
 | **POSSIBLE** | weak evidence, e.g. only the title fits | check it yourself |
 | **UNKNOWN** | nothing found | see [Troubleshooting](#12-troubleshooting) |
 
@@ -186,10 +186,10 @@ After a folder, the total time is shown.
 videoid D:\Movies --interactive        # or -i
 ```
 
-When a film is not CERTAIN and there are several candidates, VideoID stops and asks:
+When a film is not CERTAIN, VideoID stops and asks (with a single candidate, it asks whether it's that film):
 
 ```
-   Several possible films, file 52 min. Which one is it?
+   Not sure, file 52 min. Which film is it?
     1) 2019: Cíl Měsíc (2009)  [POSSIBLE]  52 min, 0 people matched, also 2019, destination lune
          https://www.csfd.cz/film/584914/
     2) 2019, destination lune (2009)  [POSSIBLE]  1 person matched
@@ -215,7 +215,7 @@ videoid D:\Movies --kodi          # identify and write in one go
 videoid kodi D:\Movies            # write for films already identified
 ```
 
-For each film that is CERTAIN or PROBABLE, this writes next to the video:
+For each film that is CERTAIN, or that you chose with `--interactive`, this writes next to the video:
 
 - `Film name.nfo`: title, original title, plot, genres, countries, studios, ratings (TMDB, ČSFD),
   director, writers, actors with roles and photos, and the database ids.
@@ -237,7 +237,7 @@ Options for `videoid kodi`:
 
 | option | |
 |---|---|
-| `--min-verdict CERTAIN` | write only for CERTAIN films (`POSSIBLE` writes for everything) |
+| `--min-verdict PROBABLE` | also write for PROBABLE films (`POSSIBLE` writes for everything) |
 | `--prefer csfd,tmdb` | source order for this run |
 | `--no-artwork` | NFO only, no poster or fanart |
 | `--overwrite` | replace an NFO that VideoID didn't write (the old one is kept as `.nfo.bak`) |
@@ -364,7 +364,7 @@ The ones you are most likely to want:
 | `scan.nfo_check_every` | `3` | quick NFO check: seconds between frames; `0` = off |
 | `ocr.languages` | `["latin"]` | scripts to read (section 3) |
 | `kodi.prefer` | `["tmdb", "csfd"]` | which database's title, plot and artwork come first |
-| `kodi.min_verdict` | `PROBABLE` | write Kodi files from this verdict up |
+| `kodi.min_verdict` | `CERTAIN` | write Kodi files from this verdict up |
 | `rename.min_verdict` | `CERTAIN` | rename from this verdict up |
 | `rename.pattern` | `{title} ({year})` | new file name |
 | `tmdb_language` | `en-US` | language of TMDB plots and titles, e.g. `cs-CZ` |

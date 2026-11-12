@@ -171,7 +171,7 @@ def write_for_file(db, fid, matcher, kcfg, overwrite=False, dry_run=False, refre
     """Write NFO (+ artwork) next to one analysed file. Returns a short status string."""
     row = db.file_get(fid)
     video = Path(row["path"])
-    min_rank = VERDICT_RANK.get(str(kcfg.get("min_verdict", "PROBABLE")).upper(), 2)
+    min_rank = VERDICT_RANK.get(str(kcfg.get("min_verdict", "CERTAIN")).upper(), 3)
     if VERDICT_RANK.get(row["verdict"] or "", 0) < min_rank:
         return f"skipped ({row['verdict'] or 'not identified'})"
     local = json.loads(row["local_json"] or "{}")

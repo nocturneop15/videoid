@@ -125,18 +125,18 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
 
 
 def _ask_match(db, fid, limit=6):
-    """scan --interactive: when the result is not CERTAIN and there are several candidates, let the user pick.
+    """scan --interactive: when the result is not CERTAIN, let the user pick the film (or confirm the only one).
     Returns True when the stored result changed."""
     if not sys.stdin or not sys.stdin.isatty():
         return False
     ms = db.matches(fid)
-    if len(ms) < 2 or ms[0]["verdict"] == "CERTAIN":
+    if not ms or ms[0]["verdict"] == "CERTAIN":
         return False
     if json.loads(ms[0]["evidence_json"]).get("rejected_by_user"):
         return False
     row = db.file_get(fid)
     file_min = f", file {row['duration'] / 60:.0f} min" if row["duration"] else ""
-    logmod.out(f"\n   Several possible films{file_min}. Which one is it?")
+    logmod.out(f"\n   Not sure{file_min}. " + ("Which film is it?" if len(ms) > 1 else "Is it this film?"))
     ms = ms[:limit]
     for i, m in enumerate(ms, 1):
         f = Film.from_dict(db.film_json(m["film_key"]) or {})
@@ -150,7 +150,8 @@ def _ask_match(db, fid, limit=6):
                 logmod.out(f"         {f.urls()[k]}")
     while True:
         try:
-            ans = input(f"   1-{len(ms)} = this film, 0 = none of these, Enter = leave as it is: ").strip()
+            pick = "1 = yes, 0 = no" if len(ms) == 1 else f"1-{len(ms)} = this film, 0 = none of these"
+            ans = input(f"   {pick}, Enter = leave as it is: ").strip()
         except EOFError:
             ans = ""
         if ans == "":
@@ -392,7 +393,7 @@ def main(argv=None):
     s.add_argument("--kodi", action="store_true", help="also write Kodi .nfo + poster/fanart for identified files")
     s.add_argument("--overwrite-nfo", action="store_true", help="with --kodi: replace NFOs not written by VideoID")
     s.add_argument("-i", "--interactive", action="store_true",
-                   help="when a film is not CERTAIN and there are several candidates, ask which one it is")
+                   help="when a film is not CERTAIN, ask which film it is (only CERTAIN films get Kodi files)")
     s.add_argument("--rename", action="store_true",
                    help="rename identified movies (and their subtitles, NFO, artwork) to 'Title (Year)'")
     s.add_argument("--no-log", dest="log_file", action="store_false",
@@ -414,7 +415,7 @@ def main(argv=None):
 
     s = sub.add_parser("kodi", aliases=["nfo"], help="write Kodi .nfo + poster/fanart next to identified files")
     s.add_argument("paths", nargs="+", help="files, folders (everything analysed below) or database ids")
-    s.add_argument("--min-verdict", help="CERTAIN, PROBABLE (default) or POSSIBLE")
+    s.add_argument("--min-verdict", help="CERTAIN (default), PROBABLE or POSSIBLE")
     s.add_argument("--prefer", help="metadata source order, e.g. csfd,tmdb (default from config kodi.prefer)")
     s.add_argument("--no-artwork", action="store_true", help="NFO only, no poster/fanart download")
     s.add_argument("--overwrite", action="store_true",

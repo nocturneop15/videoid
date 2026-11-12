@@ -48,9 +48,10 @@ DEFAULTS = {
     "ocr": {"gpu": True, "min_confidence": 0.6, "languages": ["latin"], "det_model": "server",
             "workers": "auto", "gpu_lock": "auto", "rec_buckets": "auto", "rec_device": "auto"},
     # Kodi metadata (videoid kodi / scan --kodi): <video>.nfo + <video>-poster.jpg / -fanart.jpg
-    #   min_verdict: write only for CERTAIN / PROBABLE / POSSIBLE matches and better
+    #   min_verdict: write only for matches this sure and better - CERTAIN (default; includes films chosen with
+    #   scan --interactive) / PROBABLE / POSSIBLE
     #   prefer: which database's plot, genres, title and artwork to use first (e.g. ["csfd", "tmdb"] for Czech)
-    "kodi": {"min_verdict": "PROBABLE", "artwork": True, "prefer": ["tmdb", "csfd"]},
+    "kodi": {"min_verdict": "CERTAIN", "artwork": True, "prefer": ["tmdb", "csfd"]},
     # scan --rename: the movie and its same-named subtitles / NFO / artwork / log get the pattern's name;
     #   {title} is the title Kodi gets (kodi.prefer order - put csfd first for Czech titles), also
     #   {originaltitle} and {year}; only matches at least min_verdict sure are renamed

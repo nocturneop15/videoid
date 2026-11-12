@@ -193,7 +193,7 @@ videoid.cmd scan D:\Movies --kodi          # identify and write in one go
 videoid.cmd kodi film.mkv --dry-run        # print the NFO only
 ```
 
-For every file matched `CERTAIN` or `PROBABLE`, this writes next to the video:
+For every file matched `CERTAIN` (including films chosen with `scan --interactive`), this writes next to the video:
 - **`<video>.nfo`** in [Kodi's movie NFO format](https://kodi.wiki/view/NFO_files/Movies). It holds the title, original title, plot, outline, tagline,
   runtime, ratings (TMDB, ČSFD), genres, countries, studios, tags, premiere date, year, directors, writers, and
   actors with character names and photos. It also gets `uniqueid`s for IMDb, TMDB, ČSFD and Wikidata.
@@ -203,7 +203,7 @@ Kodi picks these up with "Local information only", or with any scraper (which us
 
 | option / config | default | |
 |---|---|---|
-| `--min-verdict` / `kodi.min_verdict` | `PROBABLE` | `CERTAIN` for stricter, `POSSIBLE` for everything |
+| `--min-verdict` / `kodi.min_verdict` | `CERTAIN` | `PROBABLE` writes more, with more risk; `POSSIBLE` for everything |
 | `--prefer` / `kodi.prefer` | `tmdb,csfd` | which database's title, plot, genres and artwork come first; `csfd,tmdb` gives Czech metadata |
 | `--no-artwork` / `kodi.artwork` | on | skip poster and fanart downloads |
 | `--overwrite` | off | replace a `<video>.nfo` or artwork that VideoID didn't write. The old NFO is kept as `.nfo.bak`. |
