@@ -200,7 +200,8 @@ After a folder, the total time is shown.
 videoid D:\Movies --interactive        # or -i
 ```
 
-When a film is not CERTAIN, VideoID stops and asks (with a single candidate, it asks whether it's that film):
+When a film is not CERTAIN, or wasn't identified at all, VideoID stops and asks (with a single candidate,
+it asks whether it's that film):
 
 ```
    Not sure, file 52 min. Which film is it?
@@ -208,12 +209,18 @@ When a film is not CERTAIN, VideoID stops and asks (with a single candidate, it 
          https://www.csfd.cz/film/584914/
     2) 2019, destination lune (2009)  [POSSIBLE]  1 person matched
          https://www.imdb.com/title/tt1468821/
-   1-5 = this film, 0 = none of these, Enter = leave as it is:
+   1-2 = this film, 0 = none of these, or type the film's name (or IMDb/CSFD link), Enter = leave as it is:
 ```
 
 - **A number:** that film becomes the result, as CERTAIN, so `--kodi` and `--rename` use it.
   The result then says *chosen by you*.
 - **`0`:** none of them is right. The file is marked UNKNOWN and you won't be asked about it again.
+- **The film's name:** if the right film isn't in the list, type its name, for example `Pelíšky 1999`
+  (the year is optional). VideoID searches all the databases again for that name and compares the results with
+  the names it read in the credits, then shows the new list, so you choose with a number as before. If a year
+  could also be part of the title (`Blade Runner 2049`), both are tried. The original title or another spelling
+  often helps when nothing is found.
+- **A link or IMDb id:** `tt0167116`, or a link to the film on IMDb, ČSFD or TMDB, looks up exactly that film.
 - **Enter:** leave it as it is. You'll be asked again on the next `--interactive` run.
 
 The links let you check a candidate in the browser before answering. Films already identified are

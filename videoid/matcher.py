@@ -10,7 +10,7 @@ from .log import log
 
 NICE = {"wikidata": "Wikidata", "tmdb": "TMDB", "imdb": "IMDb", "csfd": "ČSFD"}
 SOURCE_TEXT = {"filename": "from the file name", "folder": "from the folder name", "nfo": "from the NFO",
-               "embedded": "from the file's metadata", "ocr": "read on screen"}
+               "embedded": "from the file's metadata", "ocr": "read on screen", "user": "typed by you"}
 from .sources.csfd import CSFD
 from .sources.imdb import IMDb
 from .sources.tmdb import TMDB

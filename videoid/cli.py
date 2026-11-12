@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -124,7 +125,7 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
         return None, False
     logmod.out(describe(ctx.db, fid, top=args.top))
     changed = not ctx.cached                 # a cached result was logged when it was made
-    if args.interactive and _ask_match(ctx.db, fid):
+    if args.interactive and _ask_match(ctx, fid):
         changed = True
     if args.rename:
         from .filing import rename_movie
@@ -139,44 +140,38 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
     return fid, changed
 
 
-def _ask_match(db, fid, limit=6):
-    """scan --interactive: when the result is not CERTAIN, let the user pick the film (or confirm the only one).
-    Returns True when the stored result changed."""
+def _ask_match(ctx, fid, limit=6):
+    """scan --interactive: when the result is not CERTAIN, let the user pick the film (or confirm the only one),
+    or type the film's name / IMDb id / database link to search again. Returns True when the stored result changed."""
     if not sys.stdin or not sys.stdin.isatty():
         return False
+    db = ctx.db
     ms = db.matches(fid)
-    if not ms or ms[0]["verdict"] == "CERTAIN":
+    if ms and ms[0]["verdict"] == "CERTAIN":
         return False
-    if json.loads(ms[0]["evidence_json"]).get("rejected_by_user"):
+    if ms and json.loads(ms[0]["evidence_json"]).get("rejected_by_user"):
         return False
     row = db.file_get(fid)
     file_min = f", file {row['duration'] / 60:.0f} min" if row["duration"] else ""
-    logmod.out(ui.question(f"Not sure{file_min}. " + ("Which film is it?" if len(ms) > 1 else "Is it this film?")))
-    ms = ms[:limit]
-    for i, m in enumerate(ms, 1):
-        f = Film.from_dict(db.film_json(m["film_key"]) or {})
-        ev = json.loads(m["evidence_json"])
-        aka = [t for t in f.titles if t != f.title][:2]
-        bits = [f"{f.runtime} min" if f.runtime else None, (lambda n: f"{n} {'person' if n == 1 else 'people'} matched")(len(ev.get("people") or [])),
-                ("also " + " / ".join(aka)) if aka else None]
-        logmod.out(ui.option(i, ui.c(f"{f.title} ({f.year or '?'})", ui.BOLD + ui.WHITE)) + "  "
-                   + ui.verdict(m["verdict"]) + "  " + ", ".join(b for b in bits if b))
-        for k in ("imdb", "csfd", "tmdb"):
-            if k in f.urls():
-                logmod.out("        " + ui.c(f.urls()[k], ui.BLUE))
+    changed = False
     while True:
-        try:
-            pick = "1 = yes, 0 = no" if len(ms) == 1 else f"1-{len(ms)} = this film, 0 = none of these"
-            prompt = ui.ask(f"{pick}, Enter = leave as it is:")
-            ans = input(prompt if ui.color_on(sys.stdout) else ui.plain(prompt)).strip()
-        except EOFError:
-            ans = ""
+        ms = db.matches(fid)[:limit]
+        if not ms:
+            logmod.out(ui.question(f"Not identified{file_min}. Do you know which film it is?"))
+        else:
+            logmod.out(ui.question(f"Not sure{file_min}. " + ("Which film is it?" if len(ms) > 1 else "Is it this film?")))
+            _show_options(db, ms)
+        ans = _read_answer(ms)
         if ans == "":
             logmod.out(ui.warn("left as it is"))
-            return False
-        if ans.isdigit() and 0 <= int(ans) <= len(ms):
+            return changed
+        if ans.isdigit() and int(ans) <= len(ms):
             break
-        logmod.log(ui.warn(f"type a number from 0 to {len(ms)}, or press Enter"), 0)
+        if ans.isdigit() and len(ans) < 3:          # "1917" is a film, "7" is a mistyped choice
+            logmod.log(ui.warn(f"type a number from 0 to {len(ms)}, a film name, or press Enter"), 0)
+            continue
+        if _search_typed(ctx, fid, row, ans):
+            changed = True
     if ans == "0":
         db.choose_match(fid, None)
         logmod.out(ui.warn("you chose: none of these - marked UNKNOWN"))
@@ -184,6 +179,79 @@ def _ask_match(db, fid, limit=6):
     pick = db.choose_match(fid, int(ans) - 1)
     f = db.film_json(pick["film_key"]) or {}
     logmod.out(ui.good(f"you chose: {f.get('title')} ({f.get('year') or '?'}) - now CERTAIN"))
+    return True
+
+
+def _show_options(db, ms):
+    for i, m in enumerate(ms, 1):
+        f = Film.from_dict(db.film_json(m["film_key"]) or {})
+        ev = json.loads(m["evidence_json"])
+        aka = [t for t in f.titles if t != f.title][:2]
+        n = len(ev.get("people") or [])
+        bits = [f"{f.runtime} min" if f.runtime else None, f"{n} {'person' if n == 1 else 'people'} matched",
+                ("also " + " / ".join(aka)) if aka else None]
+        logmod.out(ui.option(i, ui.c(f"{f.title} ({f.year or '?'})", ui.BOLD + ui.WHITE)) + "  "
+                   + ui.verdict(m["verdict"]) + "  " + ", ".join(b for b in bits if b))
+        for k in ("imdb", "csfd", "tmdb"):
+            if k in f.urls():
+                logmod.out("        " + ui.c(f.urls()[k], ui.BLUE))
+
+
+def _read_answer(ms):
+    if not ms:
+        pick = ""
+    elif len(ms) == 1:
+        pick = "1 = yes, 0 = no, "
+    else:
+        pick = f"1-{len(ms)} = this film, 0 = none of these, "
+    prompt = ui.ask(f"{pick}or type the film's name (or IMDb/CSFD link), Enter = leave as it is:")
+    try:
+        return input(prompt if ui.color_on(sys.stdout) else ui.plain(prompt)).strip()
+    except EOFError:
+        return ""
+
+
+def _parse_typed(text):
+    """'Pelíšky 1999' / 'Pelisky (1999)' / 'tt0167116' / 'https://www.csfd.cz/film/5954-pelisky/'
+    -> (titles to search, year, ids)."""
+    from .localinfo import CSFD_RE, IMDB_RE, TMDB_RE
+    ids = {}
+    for key, rx in (("imdb", IMDB_RE), ("tmdb", TMDB_RE), ("csfd", CSFD_RE)):
+        if m := rx.search(text):
+            ids[key] = m.group(1)
+    if ids:
+        return [], None, ids
+    # a trailing year may be part of the title ("Blade Runner 2049"): search both, the year only helps
+    titles, year = [text.strip()], None
+    if m := re.match(r"^(.*?\S)[\s,]*[(\[]?((?:18|19|20)\d\d)[)\]]?$", text.strip()):
+        titles.append(m.group(1).strip(" ,-"))
+        year = int(m.group(2))
+    return titles, year, ids
+
+
+def _search_typed(ctx, fid, row, text):
+    """Search the databases for what the user typed, keeping the credits read from the video as evidence,
+    and store the result as the new candidate list. True when something was found."""
+    titles, year, ids = _parse_typed(text)
+    people = [p for p in ctx.db.people(fid) if p["source"] in ("ocr", "llm")]
+    ev = {"titles": [(t, "user") for t in titles], "years": [(year, "user")] if year else [],
+          "ids": ids, "people": people, "runtime": row["duration"] / 60 if row["duration"] else None}
+    logmod.out(ui.step(f"Searching for what you typed: {text}"))
+    try:
+        ranked = ctx.matcher.identify(ev)
+    except Exception as e:
+        logmod.out(ui.bad(f"search failed: {e}"))
+        return False
+    if not ranked:
+        logmod.out(ui.warn("nothing found - try another spelling, the original title, or an IMDb/CSFD link"))
+        return False
+    ctx.db.save_matches(fid, [{"film_key": r["film_key"], "score": r["score"],
+                               "confidence": r.get("confidence", 0), "verdict": r.get("verdict", "POSSIBLE"),
+                               "evidence": dict(r["evidence"], typed_by_user=text)} for r in ranked[:5]])
+    b = ranked[0]
+    ctx.db.file_upsert_id(fid, film_key=b["film_key"], title=b["film"].title, year=b["film"].year,
+                          verdict=b.get("verdict", "POSSIBLE"), confidence=b.get("confidence", 0),
+                          ids_json=json.dumps(b["film"].ids))
     return True
 
 
