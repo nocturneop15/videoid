@@ -43,6 +43,24 @@ def _install_session_lock():
     OrtInferSession._videoid_lockable = True
 
 
+def onnx_error_text(exc):
+    """ONNX Runtime on non-English Windows: the native error text (e.g. a DirectML/HRESULT message) is in the
+    ANSI code page, the Python binding decodes it as UTF-8 and fails, so only a UnicodeDecodeError is left.
+    Its .object still holds the original bytes - decode them properly. Returns None if not that case."""
+    seen, x = set(), exc
+    while x is not None and id(x) not in seen:
+        seen.add(id(x))
+        if isinstance(x, UnicodeDecodeError) and isinstance(x.object, (bytes, bytearray)):
+            raw = bytes(x.object)
+            for enc in (("mbcs", "oem") if os.name == "nt" else ()) + ("latin-1",):
+                try:
+                    return " ".join(raw.decode(enc).split())
+                except (UnicodeDecodeError, LookupError):
+                    continue
+        x = x.__cause__ or x.__context__
+    return None
+
+
 def ocr_workers(cfg, device_is_gpu=True):
     """ocr.workers: "auto" = 2 on a GPU, 1 on CPU (the CPU engine is multi-threaded already)."""
     w = cfg.get("workers", "auto")
@@ -208,6 +226,15 @@ class OCR:
 
     def run(self, img):
         """img: BGR ndarray. Returns list of dict(text, conf, x, y, w, h, lang) in relative coords."""
+        try:
+            return self._run(img)
+        except Exception as e:
+            readable = onnx_error_text(e)
+            if readable:
+                raise RuntimeError(f"OCR failed on {self.device.split(',')[0]}: {readable}") from e
+            raise
+
+    def _run(self, img):
         H, W = img.shape[:2]
         if len(self.engines) == 1:
             res = self.engines[0](img)
@@ -231,7 +258,7 @@ class OCR:
                 try:
                     rr = eng.recognize_txt([crops[i] for i in idx])
                 except Exception as e:
-                    log(f"  {lang} recognition failed: {e}", 2)
+                    log(f"  {lang} recognition failed: {onnx_error_text(e) or e}", 2)
                     continue
                 for i, t, s in zip(idx, rr.txts, rr.scores):
                     cand = (t or "", float(s), lang)

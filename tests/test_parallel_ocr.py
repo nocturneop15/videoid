@@ -245,14 +245,31 @@ def real_tests(video, workers_list, n_frames):
     # end to end through ffmpeg (run_ocr) with 2 workers vs 1
     print("\n== end-to-end run_ocr (ffmpeg -> prefetch -> workers)")
     outs = {}
-    for w in (1, 2):
+    variants = [(1, None), (2, None)]
+    i = 0
+    while i < len(variants):
+        w, hw = variants[i]
+        i += 1
         c = copy.deepcopy(cfg)
         c["ocr"]["workers"] = w
         c["scan"].update(open_minutes=0, end_minutes=0.4, fps_end=1.0)
+        if hw:
+            c["scan"]["hwaccel"] = hw
+        label = f"workers={w}" + (f", hwaccel={hw}" if hw else f", hwaccel={c['scan'].get('hwaccel')}")
         ctx = pipeline.Context(c, None, None, None, lambda c=c: OCR(c["ocr"]), None)
-        outs[w], st = pipeline.run_ocr(ctx, video, info)
-        print(f"  workers={w}: {st['ocr_frames']} frames in {st['seconds']}s")
-    check(same_output(outs[1], outs[2]), "run_ocr: 2 workers == 1 worker")
+        try:
+            outs[(w, hw)], st = pipeline.run_ocr(ctx, video, info)
+            print(f"  {label}: {st['ocr_frames']} frames in {st['seconds']}s")
+        except Exception as e:
+            check(False, f"run_ocr {label} raised: {e}")
+            if w > 1 and hw is None:   # isolate: GPU video decoding (ffmpeg) running alongside GPU OCR?
+                print("  retrying with ffmpeg decoding on the CPU ...")
+                variants.append((w, "none"))
+        del ctx
+    for key, out in outs.items():
+        if key != (1, None) and (1, None) in outs:
+            check(same_output(outs[(1, None)], out), f"run_ocr: workers={key[0]}"
+                  + (f" hwaccel={key[1]}" if key[1] else "") + " == 1 worker")
     left = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ffmpeg*"], capture_output=True, text=True).stdout
     check("ffmpeg" not in left.lower() and not ocr_threads(), "no ffmpeg process or threads left")
 
