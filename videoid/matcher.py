@@ -259,10 +259,13 @@ class Matcher:
         elif best_t >= 82:
             s += 6
         det["title"] = {"sim": round(best_t), "pair": best_pair}
+        # A year in a file / folder name may be part of the title ("2019, destination lune" is from 2009), so
+        # it only counts when it fits. Only an NFO's year, which is an explicit field, may count against a film.
         yrs = [(y, src) for y, src in ev["years"]]
         if f.year and yrs:
             d, src = min((abs(f.year - y), src) for y, src in yrs)
-            s += 6 if d == 0 else 3 if d == 1 else (-6 if d > 2 and src in ("nfo", "filename") else 0)
+            nfo = [abs(f.year - y) for y, src in yrs if src == "nfo"]
+            s += 6 if d == 0 else 3 if d == 1 else (-6 if nfo and min(nfo) > 2 else 0)
             det["year"] = {"film": f.year, "diff": d, "src": src}
         if f.runtime and ev.get("runtime"):
             d = abs(f.runtime - ev["runtime"])
@@ -349,7 +352,7 @@ class Matcher:
         named = [t for t, src in ev["titles"] if src in ("filename", "nfo", "embedded")]
         if named and f.titles and max(title_sim(t, ft) for t in named for ft in f.titles) < 60 and ev["people"]:
             w.append(f"file/NFO title {named[0]!r} does not match the identified film")
-        yrs = [y for y, src in ev["years"] if src in ("filename", "nfo")]
+        yrs = [y for y, src in ev["years"] if src == "nfo"]      # a year in the file name may be in the title
         if f.year and yrs and min(abs(f.year - y) for y in yrs) > 2:
-            w.append(f"year in file name/NFO {yrs[0]} differs from film year {f.year}")
+            w.append(f"year in NFO {yrs[0]} differs from film year {f.year}")
         return w
