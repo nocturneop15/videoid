@@ -168,7 +168,10 @@ def run_ocr(ctx, path, info):
             ocr_frames(runner, seg, frames, int(length * fps), stats, out)
             log("", 1)
     stats["seconds"] = round(time.time() - t0, 1)
-    log(f"  OCR: {stats['ocr_frames']} frames in {stats['seconds']}s, {len(out)} with text", 1)
+    for k in ("decode_wait", "ocr_wait"):
+        stats[k] = round(stats.get(k, 0.0), 1)
+    log(f"  OCR: {stats['ocr_frames']} frames in {stats['seconds']}s, {len(out)} with text "
+        f"(waited {stats['decode_wait']}s for decoding, {stats['ocr_wait']}s for OCR)", 1)
     return out, stats
 
 
@@ -189,8 +192,19 @@ def ocr_frames(runner, seg, frames, total, stats, out):
             ev[3] = [seg, round(ev[0], 2), boxes, 1 + ev[2]]
             out.append(ev[3])
 
+    stats.setdefault("decode_wait", 0.0)
+    stats.setdefault("ocr_wait", 0.0)
+    clock = time.perf_counter
+    it = iter(frames)
     try:
-        for t, img in frames:
+        while True:
+            t0 = clock()
+            try:
+                t, img = next(it)
+            except StopIteration:
+                break
+            finally:
+                stats["decode_wait"] += clock() - t0          # time spent waiting for ffmpeg
             stats["frames"] += 1
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             if gray.max() < 60:                       # black frame
@@ -204,16 +218,20 @@ def ocr_frames(runner, seg, frames, total, stats, out):
                         last_ev[3][3] += 1
                 continue
             last = thumb
-            last_ev = [t, runner.submit(img), 0, None, False]
+            t0 = clock()
+            last_ev = [t, runner.submit(img), 0, None, False]     # inline OCR when there is one worker
             pending.append(last_ev)
             stats["ocr_frames"] += 1
             while len(pending) > runner.max_in_flight or (pending and pending[0][1].done()):
                 resolve(pending.popleft())
+            stats["ocr_wait"] += clock() - t0                     # time the main thread waited for OCR
             if stats["frames"] % 10 == 0:
                 log(f"\r  [{seg}] frame {stats['frames']}/{total}  ocr'd {stats['ocr_frames']}  "
                     f"with text {len(out)}   ", 1, end="")
+        t0 = clock()
         while pending:
             resolve(pending.popleft())
+        stats["ocr_wait"] += clock() - t0
     finally:
         frames.close()                     # stop decoding / ffmpeg on errors and Ctrl+C too
 

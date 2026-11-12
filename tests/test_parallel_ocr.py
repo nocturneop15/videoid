@@ -258,8 +258,12 @@ def real_tests(video, workers_list, n_frames):
         label = f"workers={w}" + (f", hwaccel={hw}" if hw else f", hwaccel={c['scan'].get('hwaccel')}")
         ctx = pipeline.Context(c, None, None, None, lambda c=c: OCR(c["ocr"]), None)
         try:
+            t = time.time()
+            ctx.ocr_engines()
+            init = time.time() - t
             outs[(w, hw)], st = pipeline.run_ocr(ctx, video, info)
-            print(f"  {label}: {st['ocr_frames']} frames in {st['seconds']}s")
+            print(f"  {label}: {st['ocr_frames']} OCR'd of {st['frames']} frames in {st['seconds']}s  "
+                  f"(model init {init:.1f}s, waited for decoding {st['decode_wait']}s, for OCR {st['ocr_wait']}s)")
         except Exception as e:
             check(False, f"run_ocr {label} raised: {e}")
             if w > 1 and hw is None:   # isolate: GPU video decoding (ffmpeg) running alongside GPU OCR?
@@ -272,6 +276,18 @@ def real_tests(video, workers_list, n_frames):
                   + (f" hwaccel={key[1]}" if key[1] else "") + " == 1 worker")
     left = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ffmpeg*"], capture_output=True, text=True).stdout
     check("ffmpeg" not in left.lower() and not ocr_threads(), "no ffmpeg process or threads left")
+
+    # decoding alone, same window as the end-to-end run
+    print("\n== decoding only (same 24 s window, no OCR)")
+    r = subprocess.run([media.ffmpeg_exe(), "-hide_banner", "-i", video], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace").stderr
+    print("  " + next((l.strip() for l in r.splitlines() if "Video:" in l), "?")[:140])
+    for hw in ("auto", "none"):
+        sc = dict(cfg["scan"], hwaccel=hw)
+        media._HWACCEL_OK.clear()
+        t = time.time()
+        n = sum(1 for _ in media.frames(video, max(0, info["duration"] - 24), 24, 1.0, info, sc))
+        print(f"  hwaccel={hw}: {n} frames in {time.time() - t:.1f}s")
 
 
 def main():
