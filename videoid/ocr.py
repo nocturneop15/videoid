@@ -275,6 +275,27 @@ class OCR:
         if "latin" not in self.langs and any(l in ("en", "ch") for l in self.langs):
             log("  note: no 'latin' OCR language - accented letters (č ř ů é ä ß ...) will be read without accents", 1)
 
+    @property
+    def shares_sessions(self):
+        """Workers may share this OCR's ONNX sessions only while GPU calls are serialized: DirectML must not
+        run two calls on one session at once. With the lock, extra sessions only cost GPU memory - on an
+        8 GB RTX 3070, 3-4 workers with own sessions ran 2-3x SLOWER than 1."""
+        return self.is_gpu and self.gpu_lock
+
+    def clone(self):
+        """Another worker using the SAME ONNX sessions (one copy of the models in GPU memory) with its own
+        Python-side state: RapidOCR and TextDetector change attributes on every call."""
+        import copy
+        c = copy.copy(self)
+        c.engines = []
+        for eng in self.engines:
+            e = copy.copy(eng)
+            e.text_det = copy.copy(eng.text_det)
+            e.text_det.postprocess_op = copy.copy(eng.text_det.postprocess_op)
+            e.text_rec = copy.copy(eng.text_rec)
+            c.engines.append(e)
+        return c
+
     @staticmethod
     def _params(params):
         from rapidocr import LangRec, ModelType, OCRVersion

@@ -45,9 +45,12 @@ class Context:
             from .ocr import ocr_workers
             first = self._ocr_factory()
             n = ocr_workers(self.cfg["ocr"], getattr(first, "is_gpu", False))
-            self._engines = [first] + [self._ocr_factory() for _ in range(n - 1)]
-            lock = " (GPU calls serialized)" if n > 1 and getattr(first, "gpu_lock", False) else ""
-            log(f"OCR engine ready on {first.device}, {n} worker(s){lock}", 1)
+            share = getattr(first, "shares_sessions", False)
+            # serialized GPU calls: workers share one set of sessions (one copy of the models in GPU memory)
+            self._engines = [first] + [first.clone() if share else self._ocr_factory() for _ in range(n - 1)]
+            how = (", shared GPU sessions, GPU calls serialized" if share else
+                   ", GPU calls serialized" if getattr(first, "gpu_lock", False) else "") if n > 1 else ""
+            log(f"OCR engine ready on {first.device}, {n} worker(s){how}", 1)
         return self._engines
 
     @property
