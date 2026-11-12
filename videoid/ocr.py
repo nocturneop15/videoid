@@ -89,6 +89,60 @@ def onnx_error_text(exc):
     return None
 
 
+def _runs_on_gpu(session):
+    try:
+        return session.session.get_providers()[0] != "CPUExecutionProvider"
+    except Exception:
+        return True
+
+
+_REC_CHOICE = {}      # (lang, device, workers) -> recognition faster on CPU? (measured once per process)
+
+
+def _calibration_crops():
+    import cv2
+    crops = []
+    for i, w in enumerate((180, 260, 340, 420, 520, 620, 700, 780, 860, 940, 1020, 1100)):
+        h = 36 + (i % 3) * 6
+        img = np.zeros((h, w, 3), np.uint8)
+        text = ("Kamera Jaromir Sofr Hudba Jiri Sust Strih Jiri Brozek " * 3)[: max(4, w // 22)]
+        cv2.putText(img, text, (4, h - 10), cv2.FONT_HERSHEY_SIMPLEX, h / 48, (235, 235, 235), 2)
+        crops.append(img)
+    return crops
+
+
+def _recognition_faster_on_cpu(eng, cpu_rec, key):
+    if key in _REC_CHOICE:
+        return _REC_CHOICE[key]
+    import time
+    gpu_rec, crops = eng.text_rec, _calibration_crops()
+
+    def timed(rec):
+        eng.text_rec = rec
+        try:
+            eng.recognize_txt(crops)                 # first call prepares the model for these sizes
+            best = float("inf")
+            for _ in range(3):
+                t = time.perf_counter()
+                eng.recognize_txt(crops)
+                best = min(best, time.perf_counter() - t)
+            return best
+        finally:
+            eng.text_rec = gpu_rec
+
+    try:
+        g, c = timed(gpu_rec), timed(cpu_rec)
+    except Exception as e:
+        log(f"  recognition calibration failed ({onnx_error_text(e) or e}); keeping it on the GPU", 1)
+        _REC_CHOICE[key] = False
+        return False
+    # CPU wins ties: it frees the GPU for detection and overlaps it across workers
+    _REC_CHOICE[key] = c <= g * 1.15
+    log(f"  text recognition on {'CPU' if _REC_CHOICE[key] else 'GPU'} "
+        f"(12 lines: GPU {g * 1000:.0f} ms, CPU {c * 1000:.0f} ms)", 1)
+    return _REC_CHOICE[key]
+
+
 def ocr_workers(cfg, device_is_gpu=True):
     """ocr.workers: "auto" = 2 on a GPU, 1 on CPU (the CPU engine is multi-threaded already)."""
     w = cfg.get("workers", "auto")
@@ -193,11 +247,19 @@ class OCR:
             logging.getLogger(name).setLevel(logging.ERROR)
         self.engines = [self._build(RapidOCR, dict(base, **{"Rec.lang_type": l})) for l in self.langs]
         self.is_gpu = self.device != "CPU"
+        # sessions replaced below are kept alive: freeing a DirectML session while other DirectML sessions keep
+        # running crashed the next GPU call (access violation, Radeon 780M)
+        self._spare = []
+        self.rec_on_cpu = False
+        rmode = str(cfg.get("rec_device", "auto")).lower()
+        if self.is_gpu and rmode in ("auto", "cpu"):
+            self._place_recognition(RapidOCR, base, rmode, workers)
+        gpu_sessions = [s for s in self._sessions() if _runs_on_gpu(s)]
         mode = str(cfg.get("gpu_lock", "auto")).lower()
         self.gpu_lock = self.is_gpu and (mode in ("true", "1", "yes") or (mode == "auto" and "DirectML" in self.device))
         if self.gpu_lock:
             _install_session_lock()
-            for s in self._sessions():
+            for s in gpu_sessions:                 # CPU recognition stays unlocked and overlaps GPU detection
                 s._videoid_lock = GPU_LOCK
         bmode = str(cfg.get("rec_buckets", "auto")).lower()
         self.rec_buckets = bmode in ("true", "1", "yes") or (bmode == "auto" and "DirectML" in self.device)
@@ -205,14 +267,16 @@ class OCR:
             _install_session_lock()
             for eng in self.engines:
                 rec = getattr(eng, "text_rec", None)
-                if rec is not None and getattr(rec, "session", None) is not None:
+                if rec is not None and getattr(rec, "session", None) in gpu_sessions:
                     rec.session._videoid_rec_pad = (int(getattr(rec, "rec_batch_num", 6) or 6), REC_WIDTH_STEP)
         self.min_conf = cfg.get("min_confidence", 0.6)
-        self.device += f", languages: {', '.join(self.langs)}, detector: {base['Det.model_type']}"
+        self.device += (f", languages: {', '.join(self.langs)}, detector: {base['Det.model_type']}"
+                        + (", text recognition on CPU" if self.rec_on_cpu else ""))
         if "latin" not in self.langs and any(l in ("en", "ch") for l in self.langs):
             log("  note: no 'latin' OCR language - accented letters (č ř ů é ä ß ...) will be read without accents", 1)
 
-    def _build(self, cls, params):
+    @staticmethod
+    def _params(params):
         from rapidocr import LangRec, ModelType, OCRVersion
         p = dict(params)
         p["Rec.lang_type"] = LangRec(p["Rec.lang_type"])
@@ -220,6 +284,28 @@ class OCR:
             p[k] = OCRVersion(p[k])
         for k in ("Det.model_type", "Rec.model_type"):
             p[k] = ModelType(p[k])
+        return p
+
+    def _place_recognition(self, cls, base, mode, workers):
+        """Text recognition is a small model with variable input; on some GPUs (RTX 3070 via DirectML) it ran
+        far slower than on the CPU. rec_device "cpu" moves it to the CPU, "auto" times both once per process."""
+        cpu_base = {k: v for k, v in base.items() if not k.startswith("EngineConfig.onnxruntime.use_")}
+        for lang, eng in zip(self.langs, self.engines):
+            try:
+                twin = cls(params=self._params(dict(cpu_base, **{"Rec.lang_type": lang})))
+                twin._load_rec_model()                       # recognition only - no second detector
+                cpu_rec = twin.text_rec
+            except Exception as e:
+                log(f"  CPU text recognition unavailable ({e}); keeping it on the GPU", 1)
+                return
+            key = (lang, self.device, workers)
+            if mode == "cpu" or _recognition_faster_on_cpu(eng, cpu_rec, key):
+                self._spare.append(eng.text_rec)
+                eng.text_rec = cpu_rec
+                self.rec_on_cpu = True
+
+    def _build(self, cls, params):
+        p = self._params(params)
         try:
             return self._warm_up(cls(params=p))
         except Exception as e:  # GPU init can fail on exotic drivers - fall back to CPU

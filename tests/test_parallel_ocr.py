@@ -201,11 +201,13 @@ def real_tests(video, workers_list, n_frames):
         init = time.time() - t
         # count how many ONNX calls are inside the GPU at the same time (measured under the lock, if any)
         from rapidocr.inference_engine.onnxruntime.main import OrtInferSession
-        from videoid.ocr import _install_session_lock
+        from videoid.ocr import _install_session_lock, _runs_on_gpu
         _install_session_lock()
         orig, state, mtx = OrtInferSession._videoid_run, {"now": 0, "max": 0}, threading.Lock()
 
         def counting(self, x):
+            if engines[0].is_gpu and not _runs_on_gpu(self):   # CPU recognition may overlap GPU detection
+                return orig(self, x)
             with mtx:
                 state["now"] += 1
                 state["max"] = max(state["max"], state["now"])
@@ -226,9 +228,10 @@ def real_tests(video, workers_list, n_frames):
             OrtInferSession._videoid_run = orig
         results[w], timings[w] = out, dt
         lock = "locked" if engines[0].gpu_lock else "unlocked"
-        print(f"  workers={w} ({lock}, {engines[0].device.split(',')[0]}): {dt:6.1f}s  "
+        where = engines[0].device.split(",")[0] + (", recognition on CPU" if engines[0].rec_on_cpu else "")
+        print(f"  workers={w} ({lock}, {where}): {dt:6.1f}s  "
               f"{dt / max(1, stats['ocr_frames']):.3f} s/frame  ({stats['ocr_frames']} OCR'd, init {init:.0f}s)  "
-              f"max concurrent ONNX calls {state['max']}", flush=True)
+              f"max concurrent {'GPU' if engines[0].is_gpu else 'ONNX'} calls {state['max']}", flush=True)
         if engines[0].gpu_lock:
             check(state["max"] <= 1, f"workers={w}: GPU calls never overlapped while locked")
         elif w > 1:
@@ -277,38 +280,27 @@ def real_tests(video, workers_list, n_frames):
     left = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ffmpeg*"], capture_output=True, text=True).stdout
     check("ffmpeg" not in left.lower() and not ocr_threads(), "no ffmpeg process or threads left")
 
-    # recognition input sizes: DirectML prepares the model again for every new input shape
-    print("\n== text recognition input sizes (end credits, 1 worker, 2 passes each)")
-    from rapidocr.inference_engine.onnxruntime.main import OrtInferSession
-    from videoid.ocr import _install_session_lock
+    # where text recognition runs (end credits = text-heavy frames)
+    print("\n== text recognition on GPU vs CPU (end credits, 1 worker)")
     credits = [img.copy() for _, img in media.frames(video, max(0, info["duration"] - 24), 24, 1.0, info,
                                                      cfg["scan"])]
-    texts = {}
-    for mode in (False, True):
-        o = OCR(dict(cfg["ocr"], rec_buckets=mode))
-        _install_session_lock()
-        rec, shapes = o.engines[0].text_rec.session, set()
-        orig = OrtInferSession._videoid_run
-
-        def spy(self, x, orig=orig, rec=rec, shapes=shapes):
-            if self is rec:
-                shapes.add(tuple(x.shape))
-            return orig(self, x)
-        OrtInferSession._videoid_run = spy
-        try:
-            times = []
-            for _ in range(2):
-                t = time.time()
-                texts[mode] = [[b["text"] for b in o.run(img)] for img in credits]
-                times.append((time.time() - t) / max(1, len(credits)))
-        finally:
-            OrtInferSession._videoid_run = orig
-        print(f"  rec_buckets={str(mode).lower():5}: pass 1 {times[0]:.3f} s/frame, pass 2 (sizes known) "
-              f"{times[1]:.3f} s/frame, {len(shapes)} distinct input sizes", flush=True)
-        del o
-    lines = sum(len(x) for x in texts[False])
-    same = sum(1 for a, b in zip(texts[False], texts[True]) if a == b)
-    print(f"  text identical in {same} of {len(credits)} frames ({lines} lines)")
+    texts, keep = {}, []
+    for mode in ("gpu", "cpu", "auto"):
+        o = OCR(dict(cfg["ocr"], rec_device=mode))
+        keep.append(o)                  # never free DirectML sessions while others are in use
+        if not o.is_gpu:
+            print("  (OCR runs on the CPU - nothing to compare)")
+            break
+        o.run(credits[0])
+        t = time.time()
+        texts[mode] = [[b["text"] for b in o.run(img)] for img in credits]
+        dt = (time.time() - t) / max(1, len(credits))
+        print(f"  rec_device={mode:4}: {dt:.3f} s/frame  -> recognition on {'CPU' if o.rec_on_cpu else 'GPU'}",
+              flush=True)
+    if "gpu" in texts and "cpu" in texts:
+        same = sum(1 for a, b in zip(texts["gpu"], texts["cpu"]) if a == b)
+        print(f"  text identical in {same} of {len(credits)} frames ({sum(len(x) for x in texts['gpu'])} lines)")
+    del keep
 
     # decoding alone, same window as the end-to-end run
     print("\n== decoding only (same 24 s window, no OCR)")
