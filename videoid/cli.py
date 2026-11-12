@@ -329,6 +329,11 @@ def main(argv=None):
     sub.add_parser("doctor", help="check ffmpeg, GPU OCR, LLM and database")
     sub.add_parser("keys", help="enter / change API keys (also re-asks skipped ones)")
 
+    # "scan" is the default command: `videoid D:\Movies --kodi` == `videoid scan D:\Movies --kodi`
+    argv = list(sys.argv[1:] if argv is None else argv)
+    first = next((i for i, a in enumerate(argv) if not a.startswith("-")), None)
+    if first is not None and argv[first] not in sub.choices:
+        argv.insert(first, "scan")
     args = ap.parse_args(argv)
     logmod.VERBOSITY = 2 if args.verbose else 0 if args.quiet else 1
     cfg = config.load()

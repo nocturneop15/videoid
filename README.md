@@ -105,6 +105,7 @@ videoid.cmd config llm.model qwen2.5:7b
 
 ```
 videoid.cmd scan D:\Movies                    # recursive; already identified files are skipped
+videoid.cmd D:\Movies --kodi                  # "scan" is the default command
 videoid.cmd scan D:\Movies\film.mkv --force   # redo OCR
 videoid.cmd scan D:\Movies --rematch          # reuse stored OCR, query databases again
 videoid.cmd scan D:\Movies --no-ocr           # file name + NFO only (fast)
