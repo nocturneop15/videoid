@@ -32,6 +32,23 @@ def oshash(path):
         return None
 
 
+_EP_MARK = re.compile(r"(?i)(?:^|[^a-z0-9])(?:s\d{1,2}[ ._-]?e\d{1,3}|\d{1,2}x\d{1,3}|e\d{1,3}|ep\.?|episode|"
+                      r"epizoda|d[ií]l|[čc][aá]st|folge|serie|season|s[eé]rie|series)(?=[^a-z]|$)")
+
+
+def episode_marked(name, season=None):
+    """Only a season or an explicit marker (S01E02, 1x02, E05, Episode, díl, část, ...) makes a file a TV
+    episode; guessit alone also calls "35 let ..." or "2001 ..." episode 35 / 2001."""
+    return season is not None or bool(_EP_MARK.search(name or ""))
+
+
+def is_episode(local, video_name=""):
+    """For files scanned before this rule: the stored guess is re-checked against the file name."""
+    if local.get("type") != "episode":
+        return False
+    return local.get("nfo_episode") or episode_marked(video_name, local.get("season"))
+
+
 def guess_from_name(path):
     out = {"titles": [], "years": [], "type": None, "season": None, "episode": None}
     try:
@@ -61,6 +78,15 @@ def guess_from_name(path):
             if i == 0:
                 out["type"] = g.get("type")
                 out["season"], out["episode"] = g.get("season"), g.get("episode")
+                if out["type"] == "episode" and not episode_marked(name, out["season"]):
+                    # "35 let Spirituál kvintetu": a bare number is not an episode - read it as a film title
+                    out.update(type="movie", season=None, episode=None)
+                    try:
+                        mt = guessit(name, {"type": "movie"}).get("title")
+                    except Exception:
+                        mt = None
+                    if mt and t and str(mt) != str(t):
+                        out["titles"] = [(str(mt), src) if x == (str(t), src) else x for x in out["titles"]]
         else:
             stem = re.sub(r"[._]+", " ", Path(name).stem)
             m = YEAR_RE.search(stem)
@@ -121,6 +147,7 @@ def parse_nfo(path):
     xml_start = text.find("<movie")
     if xml_start < 0:
         xml_start = text.find("<episodedetails")
+        out["episode_nfo"] = xml_start >= 0
     if xml_start >= 0:
         _parse_kodi(text[xml_start:], out)
     else:
@@ -204,6 +231,8 @@ def gather(path, probe):
         ev["titles"] += n["titles"]
         ev["years"] += n["years"]
         ev["people"] += n["people"]
+        if n.get("episode_nfo"):
+            ev.update(type="episode", nfo_episode=True)
     if probe.get("title"):
         t = probe["title"]
         # container titles are often release names - run them through guessit too

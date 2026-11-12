@@ -175,7 +175,8 @@ def write_for_file(db, fid, matcher, kcfg, overwrite=False, dry_run=False, refre
     if VERDICT_RANK.get(row["verdict"] or "", 0) < min_rank:
         return f"skipped ({row['verdict'] or 'not identified'})"
     local = json.loads(row["local_json"] or "{}")
-    if local.get("type") == "episode":
+    from .localinfo import is_episode
+    if is_episode(local, video.name):
         return "skipped (TV episode - only movies are written)"
     if not video.exists():
         return "skipped (file not found)"

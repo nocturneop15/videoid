@@ -71,7 +71,8 @@ def rename_movie(db, fid, matcher, rcfg, prefer):
     min_rank = VERDICT_RANK.get(str(rcfg.get("min_verdict", "PROBABLE")).upper(), 2)
     if VERDICT_RANK.get(row["verdict"] or "", 0) < min_rank:
         return None, f"not renamed ({row['verdict'] or 'not identified'})"
-    if json.loads(row["local_json"] or "{}").get("type") == "episode":
+    from .localinfo import is_episode
+    if is_episode(json.loads(row["local_json"] or "{}"), video.name):
         return None, "not renamed (TV episode)"
     if not video.exists():
         return None, "not renamed (file not found)"
