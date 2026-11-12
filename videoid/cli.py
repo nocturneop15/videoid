@@ -33,8 +33,10 @@ def _ctx(cfg, args, need_ocr=True):
 
 
 def cmd_scan(cfg, args):
-    from .pipeline import describe, iter_videos, process_file
+    import time
+    from .pipeline import describe, fmt_duration, iter_videos, process_file
     sc = cfg["scan"]
+    t_all = time.time()
     for k in ("open_minutes", "end_minutes"):
         v = getattr(args, k)
         if v is not None:
@@ -69,6 +71,8 @@ def cmd_scan(cfg, args):
                 from .kodi import write_for_file
                 print("   kodi: " + write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"],
                                                   overwrite=args.overwrite_nfo), flush=True)
+    if len(results) > 1:
+        log(f"\n{len(results)} files in {fmt_duration(time.time() - t_all)}", 0)
     if args.json:
         Path(args.json).write_text(json.dumps([_file_record(ctx.db, f) for f in results], indent=2,
                                               ensure_ascii=False), encoding="utf-8")

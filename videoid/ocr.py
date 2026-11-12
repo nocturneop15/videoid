@@ -4,10 +4,31 @@ Multi-language: text DETECTION runs once per frame (script independent); every c
 RECOGNITION model then reads the detected boxes (batched) and the best-scoring reading wins.
 """
 import logging
+import unicodedata
 
 import numpy as np
 
 from .log import log
+from .textutil import strip_accents
+
+
+def _accents(s):
+    return sum(1 for c in s if strip_accents(c) != c)
+
+
+def _better(new, cur):
+    """new/cur: (text, score, lang). Two models agreeing on the letters but differing only in accents:
+    trust the one that CAN write accents (an ASCII-only model is no evidence against them)."""
+    t, s, _ = new
+    if not t:
+        return False
+    if not cur[0]:
+        return True
+    if strip_accents(t).casefold() == strip_accents(cur[0]).casefold():
+        a, b = _accents(t), _accents(cur[0])
+        if a != b:
+            return a > b
+    return s > cur[1] + 0.02
 
 # user-facing names -> PP-OCRv5 recognition model
 LANG_ALIASES = {
@@ -66,8 +87,10 @@ class OCR:
             "Global.use_cls": False,        # credits are never upside down
             # with several languages the primary model must not drop boxes it cannot read itself
             "Global.text_score": 0.0 if len(self.langs) > 1 else 0.5,
+            # RapidOCR shrinks anything longer than 2000 px before detection - frames are sized by us
+            "Global.max_side_len": 4096,
             "Det.ocr_version": "PP-OCRv5",
-            "Det.model_type": cfg.get("det_model", "mobile"),
+            "Det.model_type": cfg.get("det_model", "server"),
             "Rec.ocr_version": "PP-OCRv5",
             "Rec.model_type": "mobile",
         }
@@ -81,7 +104,9 @@ class OCR:
             logging.getLogger(name).setLevel(logging.ERROR)
         self.engines = [self._build(RapidOCR, dict(base, **{"Rec.lang_type": l})) for l in self.langs]
         self.min_conf = cfg.get("min_confidence", 0.6)
-        self.device += f", languages: {', '.join(self.langs)}"
+        self.device += f", languages: {', '.join(self.langs)}, detector: {base['Det.model_type']}"
+        if "latin" not in self.langs and any(l in ("en", "ch") for l in self.langs):
+            log("  note: no 'latin' OCR language - accented letters (č ř ů é ä ß ...) will be read without accents", 1)
 
     def _build(self, cls, params):
         from rapidocr import LangRec, ModelType, OCRVersion
@@ -136,10 +161,14 @@ class OCR:
                     log(f"  {lang} recognition failed: {e}", 2)
                     continue
                 for i, t, s in zip(idx, rr.txts, rr.scores):
-                    if t and float(s) > best[i][1] + 0.02:
-                        best[i] = (t, float(s), lang)
+                    cand = (t or "", float(s), lang)
+                    if _better(cand, best[i]):
+                        # agreeing readings back each other up - keep the higher confidence
+                        same = best[i][0] and strip_accents(cand[0]).casefold() == strip_accents(best[i][0]).casefold()
+                        best[i] = (cand[0], max(cand[1], best[i][1]) if same else cand[1], lang)
         out = []
         for pts, (txt, sc, lang) in zip(boxes, best):
+            txt = unicodedata.normalize("NFC", txt or "")   # one code point per accented letter
             if sc < self.min_conf or not txt.strip():
                 continue
             x0, y0 = pts[:, 0].min(), pts[:, 1].min()

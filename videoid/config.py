@@ -18,8 +18,10 @@ DEFAULTS = {
         "end_minutes": 12.0,     # how much of the end to scan for end credits
         "fps_open": 1.0,
         "fps_end": 1.0,
-        "min_width": 1280,       # small videos are upscaled for better OCR
-        "max_width": 1600,
+        "min_width": 1920,       # small videos are upscaled (lanczos) for better OCR - SD credit text is tiny
+        "max_width": 1920,
+        "deinterlace": "auto",   # auto (frames flagged interlaced) | always | off
+        "scale_flags": "lanczos",
         "hwaccel": "auto",       # auto | d3d11va | dxva2 | none
         "min_size_mb": 50,       # skip smaller files (samples, extras)
         "extensions": ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "mpg", "mpeg", "ts",
@@ -28,7 +30,9 @@ DEFAULTS = {
     # languages: OCR recognition models to run. Detection runs once, each extra language adds ~30 % time.
     # latin (cs, de, fr, ...), en, ch (Chinese + Japanese), ko, hi (Devanagari: Hindi/Marathi/Nepali), ta, te,
     # th, ar (Arabic/Persian/Urdu), ru (East Slavic), cyrillic (bg/sr/mk), el
-    "ocr": {"gpu": True, "min_confidence": 0.6, "languages": ["latin"]},
+    # det_model: server (accurate on small/thin credit text) | mobile (faster)
+    # Diacritics (č ř ů ä ß ...) need the latin model - en and ch can only output plain ASCII Latin.
+    "ocr": {"gpu": True, "min_confidence": 0.6, "languages": ["latin"], "det_model": "server"},
     # Kodi metadata (videoid kodi / scan --kodi): <video>.nfo + <video>-poster.jpg / -fanart.jpg
     #   min_verdict: write only for CERTAIN / PROBABLE / POSSIBLE matches and better
     #   prefer: which database's plot, genres, title and artwork to use first (e.g. ["csfd", "tmdb"] for Czech)

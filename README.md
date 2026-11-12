@@ -39,7 +39,7 @@ and the best-scoring reading wins. Each extra language adds roughly 30 % to OCR 
 | `--lang` / `ocr.languages` | script / languages |
 |---|---|
 | `latin` (default) | Czech, Slovak, German, French, Italian, Spanish, Polish, Hungarian, … (with diacritics) |
-| `en` | English only (slightly better for English-only credits) |
+| `en` | English only (slightly better for English-only credits; cannot read accents, so keep `latin` alongside it) |
 | `zh`, `ja` | Chinese (simplified + traditional) and Japanese (one model) |
 | `ko` | Korean |
 | `hi`, `mr`, `ne` | Devanagari: Hindi, Marathi, Nepali |
@@ -56,6 +56,19 @@ videoid.cmd config ocr.languages "[\"latin\", \"ja\", \"ko\"]"
 The credits parser knows the role headers in these languages (निर्देशक, 导演, 監督, 감독, режиссёр, இயக்கம், …).
 Names in scripts without capital letters are found by shape and position.
 Wikidata names are also fetched in the enabled scripts, so 张艺谋 on screen matches Zhang Yimou.
+When two models (or two frames) read the same name and differ only in accents, the accented reading is kept.
+
+### OCR quality vs speed
+
+Frames are deinterlaced (`scan.deinterlace`: `auto` = frames flagged interlaced, `always`, `off`), then scaled
+to 1920 px wide with lanczos (`scan.min_width` / `max_width` / `scale_flags`), so SD credit text gets enough pixels.
+Text is found by the PP-OCRv5 **server** detector, which catches small and thin credit text much better.
+It is about 4× slower than the mobile one. To trade accuracy back for speed:
+```
+videoid.cmd config ocr.det_model mobile
+videoid.cmd config scan.max_width 1600
+```
+Each file reports its total time and OCR time.
 
 ## API keys
 

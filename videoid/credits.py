@@ -7,7 +7,18 @@ from pathlib import Path
 from rapidfuzz import fuzz, process
 
 from .log import log
-from .textutil import CASED, compact, fold, norm, roman_to_int, script_of, split_camel
+from .textutil import CASED, compact, fold, norm, roman_to_int, script_of, split_camel, strip_accents
+
+
+def _pick_reading(cur, cur_conf, new, new_conf):
+    """Merge two readings of the same line. Blur, scaling and compression erase diacritics far more often
+    than they invent them, so when the readings differ only in accents keep the accented one."""
+    if strip_accents(cur).casefold() == strip_accents(new).casefold():
+        ca = sum(1 for c in cur if strip_accents(c) != c)
+        na = sum(1 for c in new if strip_accents(c) != c)
+        if ca != na:
+            return (cur if ca > na else new), max(cur_conf, new_conf)
+    return (new, new_conf) if new_conf > cur_conf else (cur, cur_conf)
 
 # ---------------------------------------------------------------------------
 # Role vocabulary (accent-free, lowercase). Longest phrase wins, so specific crew
@@ -371,8 +382,7 @@ class CreditCollector:
                                "height": round(box["h"], 4), "seen": 1}
             return True
         cur["seen"] += 1
-        if box["conf"] > cur["conf"]:
-            cur["text"], cur["conf"] = box["text"], box["conf"]
+        cur["text"], cur["conf"] = _pick_reading(cur["text"], cur["conf"], box["text"], box["conf"])
         return False
 
     def _add_person(self, name, role, conf, verified=False):
@@ -382,8 +392,7 @@ class CreditCollector:
         w = getattr(self, "_weight", 1)
         if p:
             p["seen"] += w
-            if conf > p["conf"]:
-                p["name"], p["conf"] = name, conf
+            p["name"], p["conf"] = _pick_reading(p["name"], p["conf"], name, conf)
         else:
             self.people[key] = {"name": name, "role": role, "source": "ocr", "seen": w, "conf": conf,
                                 "verified": verified}

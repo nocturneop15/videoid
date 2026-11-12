@@ -66,10 +66,24 @@ def _hwaccel_candidates(setting):
     return [setting, None]
 
 
+def _video_filter(fps, ow, oh, scan_cfg):
+    """Deinterlace (combing on text edges wrecks OCR), sample, then scale with lanczos (sharper glyphs
+    than bicubic when SD is upscaled). deinterlace: auto = only frames flagged interlaced, always, off."""
+    vf = []
+    mode = str(scan_cfg.get("deinterlace", "auto")).lower()
+    if mode in ("auto", "always", "true", "1"):
+        deint = "interlaced" if mode == "auto" else "all"
+        vf.append(f"bwdif=mode=send_frame:parity=auto:deint={deint}")
+    vf.append(f"fps={fps}")
+    vf.append(f"scale={ow}:{oh}:flags={scan_cfg.get('scale_flags', 'lanczos')}")
+    return ",".join(vf)
+
+
 def frames(path, start, length, fps, info, scan_cfg):
     """Yield (timestamp_seconds, BGR ndarray) sampled at `fps` from [start, start+length)."""
     ow, oh = _out_size(info, scan_cfg)
     fsize = ow * oh * 3
+    vf = _video_filter(fps, ow, oh, scan_cfg)
     for hw in _hwaccel_candidates(scan_cfg.get("hwaccel", "auto")):
         if hw and _HWACCEL_OK.get(hw) is False:
             continue
@@ -77,7 +91,7 @@ def frames(path, start, length, fps, info, scan_cfg):
         if hw:
             cmd += ["-hwaccel", hw]
         cmd += ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(path), "-an", "-sn", "-dn",
-                "-vf", f"fps={fps},scale={ow}:{oh}:flags=bicubic", "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"]
+                "-vf", vf, "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"]
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=CREATE_NO_WINDOW)
         err = []
         t = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)

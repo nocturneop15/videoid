@@ -43,6 +43,11 @@ class Context:
 
 
 def _segments(duration, sc):
+    # ffmpeg reads "-t 0" as "no limit", so a disabled (0 minute) segment must not be passed on
+    return [s for s in _segments_raw(duration, sc) if s[2] > 0]
+
+
+def _segments_raw(duration, sc):
     o, e = sc["open_minutes"] * 60, sc["end_minutes"] * 60
     if not duration:
         return [("open", 0, o, sc["fps_open"])]
@@ -144,6 +149,7 @@ def process_file(ctx, path, opts):
         return row["id"]
 
     log(f"\n== {path}", 0)
+    t_start = time.time()
     info = media.probe(path)
     local = localinfo.gather(path, info)
     if opts.no_nfo:      # testing: identify from name + credits only
@@ -186,7 +192,15 @@ def process_file(ctx, path, opts):
     else:
         db.file_upsert(str(path), matched_at=now(), film_key=None, title=None, year=None, verdict="UNKNOWN",
                        confidence=0, ids_json="{}")
+    ocr_s = (meta.get("stats") or {}).get("seconds") if opts.ocr else None
+    log(f"  total time: {fmt_duration(time.time() - t_start)}"
+        + (f" (OCR {fmt_duration(ocr_s)})" if ocr_s else ""), 0)
     return fid
+
+
+def fmt_duration(s):
+    s = int(round(s))
+    return f"{s // 3600}h {s % 3600 // 60:02d}m {s % 60:02d}s" if s >= 3600 else f"{s // 60}m {s % 60:02d}s"
 
 
 def describe(db, fid, top=3, show_people=True):
