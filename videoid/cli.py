@@ -10,6 +10,26 @@ from .film import Film
 from .log import log
 
 
+def _repair_argv(argv):
+    """Undo the Windows trailing-backslash quoting trap.
+
+    PowerShell passes 'X:\\My films\\' to a program as "X:\\My films\\" and the C runtime reads the closing \\" as a
+    literal quote, so the path and every argument after it arrive as ONE argument: 'X:\\My films" --force --kodi'.
+    A real Windows path can never contain '"', so split there: the path gets its backslash back and the rest is
+    split into the arguments it was meant to be."""
+    if sys.platform != "win32":
+        return list(argv)
+    out = []
+    for a in argv:
+        if '"' in a:
+            head, _, rest = a.partition('"')
+            out.append(head + "\\")
+            out.extend(_repair_argv(rest.split()))
+        else:
+            out.append(a)
+    return out
+
+
 def _ctx(cfg, args, need_ocr=True):
     from .credits import detect_llm
     from .db import DB
@@ -334,7 +354,7 @@ def main(argv=None):
     sub.add_parser("keys", help="enter / change API keys (also re-asks skipped ones)")
 
     # "scan" is the default command: `videoid D:\Movies --kodi` == `videoid scan D:\Movies --kodi`
-    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = _repair_argv(sys.argv[1:]) if argv is None else list(argv)
     first = next((i for i, a in enumerate(argv) if not a.startswith("-")), None)
     if first is not None and argv[first] not in sub.choices:
         argv.insert(first, "scan")
