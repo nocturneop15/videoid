@@ -23,8 +23,13 @@ def refresh_details(film, matcher, db, force=False):
     """Films matched before details were stored (or with --refresh): re-fetch plot, genres, artwork...
     TMDB / CSFD responses usually come straight from the HTTP cache."""
     have = set(film.details)
+    stale = set()
+    if matcher.tmdb and "tmdb" in have and film.details["tmdb"].get("lang", "en-US") != matcher.tmdb.tag:
+        stale.add("tmdb")                  # fetched in another language before scrape_language changed
     for name, src in (("tmdb", matcher.tmdb), ("csfd", matcher.csfd)):
-        if src and name in film.ids and (force or name not in have):
+        if src and name in film.ids and (force or name not in have or name in stale):
+            if name in stale:
+                film.details.pop(name, None)
             try:
                 f = src.fetch(film.ids[name])
             except Exception as e:            # source down / blocked: write what we have
@@ -32,7 +37,7 @@ def refresh_details(film, matcher, db, force=False):
                 f = None
             if f:
                 film.merge(f)
-    if set(film.details) != have or force:
+    if set(film.details) != have or force or stale:
         db.save_film(film)
     return film
 

@@ -72,6 +72,22 @@ To enter or change the key later:
 videoid keys
 ```
 
+Then it asks for your **metadata languages**: the languages you want the titles, plots, genres and
+posters in, **most preferred first**:
+
+```
+  languages: cs, sk, en
+```
+
+Use two-letter codes (`cs` Czech, `sk` Slovak, `en` English, `de` German, `pl` Polish, `fr` French, ...).
+There is no default, so enter at least one. Each text is taken in the first of your languages that has
+it: with `cs, sk, en`, a film without a Czech plot gets the Slovak one, and without that the English one.
+To change the order later:
+
+```
+videoid languages
+```
+
 ---
 
 ## 3. Identifying films
@@ -248,17 +264,28 @@ scraper, since Kodi reads local NFOs first.
 **If Kodi already knew the films before**, it won't notice the new NFOs. Remove the source and add it
 again, or select a film → *Information* → *Refresh*.
 
-**Czech metadata:** to get the plot, genres and title from ČSFD instead of TMDB:
+**Metadata languages:** the title, plot, genres and poster come in the languages you chose on the first
+start (section 2), most preferred first:
 
 ```
-videoid config kodi.prefer "[\"csfd\", \"tmdb\"]"
+videoid languages                               # change the order
+videoid D:\Movies --kodi --scrape-lang en,cs    # or just for one run
 ```
+
+Each text (title, plot, tagline) is taken from TMDB in the first of your languages that has it. The
+poster is the one with your first language's lettering if there is one; the fanart is one without text.
+Genres come in your first language. When Czech or Slovak is first, ČSFD comes first, so you get Czech titles
+and plots even for films TMDB hasn't translated. Films written before are switched to the new languages the
+next time their NFO is written (`videoid kodi D:\Movies --overwrite` rewrites them all now).
+
+You can also choose the database order yourself: `videoid config kodi.prefer "[\"csfd\", \"tmdb\"]"`.
 
 Options for `videoid kodi`:
 
 | option | |
 |---|---|
 | `--min-verdict PROBABLE` | also write for PROBABLE films (`POSSIBLE` writes for everything) |
+| `--scrape-lang en,cs` | metadata languages for this run, most preferred first |
 | `--prefer csfd,tmdb` | source order for this run |
 | `--no-artwork` | NFO only, no poster or fanart |
 | `--overwrite` | replace an NFO that VideoID didn't write (the old one is kept as `.nfo.bak`) |
@@ -410,11 +437,12 @@ The ones you are most likely to want:
 | `scan.subtitle_characters` | `3` | characters the subtitles must name to accept a film; `0` = off |
 | `scan.nfo_check_every` | `3` | quick NFO check: seconds between frames; `0` = off |
 | `ocr.languages` | `["latin"]` | scripts to read (section 3) |
-| `kodi.prefer` | `["tmdb", "csfd"]` | which database's title, plot and artwork come first |
+| `scrape_language` | none, asked on the first run | languages of titles, plots, genres and posters, most preferred first, e.g. `["cs", "sk", "en"]` (`videoid languages`) |
+| `kodi.prefer` | `["tmdb", "csfd"]` | which database's title, plot and artwork come first (ČSFD first when `scrape_language` starts with `cs`/`sk`) |
 | `kodi.min_verdict` | `CERTAIN` | write Kodi files from this verdict up |
 | `rename.min_verdict` | `CERTAIN` | rename from this verdict up |
 | `rename.pattern` | `{title} ({year})` | new file name |
-| `tmdb_language` | `en-US` | language of TMDB plots and titles, e.g. `cs-CZ` |
+| `tmdb_language` | `en-US` | TMDB language when `scrape_language` is empty `[]` |
 
 ### Optional: a local AI model
 

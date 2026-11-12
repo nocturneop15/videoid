@@ -29,8 +29,11 @@ class Matcher:
         self.db = db
         s = cfg["sources"]
         from .ocr import wikidata_langs
-        self.wd = Wikidata(http, wikidata_langs(cfg["ocr"].get("languages"))) if s.get("wikidata", True) else None
-        tm = TMDB(http, cfg.get("tmdb_api_key"), cfg.get("tmdb_language", "en-US"))
+        from .config import scrape_langs, tmdb_lang
+        langs = scrape_langs(cfg)
+        self.wd = (Wikidata(http, wikidata_langs(cfg["ocr"].get("languages")), first=langs)
+                   if s.get("wikidata", True) else None)
+        tm = TMDB(http, cfg.get("tmdb_api_key"), tmdb_lang(cfg), prefer=langs)
         self.tmdb = tm if (s.get("tmdb", True) and tm.enabled) else None
         self.imdb = IMDb(http) if s.get("imdb", True) else None
         self.csfd = CSFD(http) if s.get("csfd", True) else None

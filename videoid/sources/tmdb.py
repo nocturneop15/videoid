@@ -19,10 +19,13 @@ JOB_ROLE = {
 class TMDB:
     name = "tmdb"
 
-    def __init__(self, http, key, language="en-US"):
+    def __init__(self, http, key, language="en-US", prefer=None):
         self.http = http
         self.key = key or ""
         self.lang = language
+        # texts are taken in the first of these languages that has them (TMDB translations)
+        self.prefer = list(prefer or [language.split("-")[0]])
+        self.tag = language + ":" + ",".join(self.prefer)      # stored with details: re-fetch when it changes
         self.enabled = bool(self.key)
 
     def _get(self, path, **params):
@@ -62,7 +65,8 @@ class TMDB:
 
     def fetch(self, tmdb_id):
         m = self._get(f"/movie/{tmdb_id}", language=self.lang,
-                      append_to_response="credits,external_ids,alternative_titles")
+                      append_to_response="credits,external_ids,alternative_titles,images,translations",
+                      include_image_language=",".join(self.prefer + ["null"]))
         if not m:
             return None
         ext = m.get("external_ids") or {}
@@ -77,16 +81,39 @@ class TMDB:
         for c in cast:
             f.add_person(c.get("name"), "cast")
             f.add_alias(c.get("name"), c.get("original_name"))       # native-script name
+        imgs = m.get("images") or {}
+
+        def best(items, order):
+            """poster in our language, else English, else without text; fanart without text first"""
+            rank = {l: i for i, l in enumerate(order)}
+            items = sorted(items, key=lambda x: (rank.get(x.get("iso_639_1"), 9), -(x.get("vote_average") or 0)))
+            return IMG + "original" + items[0]["file_path"] if items else None
+        poster = best(imgs.get("posters") or [], self.prefer + [None]) or (
+            IMG + "original" + m["poster_path"] if m.get("poster_path") else None)
+        fanart = best(imgs.get("backdrops") or [], [None] + self.prefer) or (
+            IMG + "original" + m["backdrop_path"] if m.get("backdrop_path") else None)
+        tr = {}
+        for t in (m.get("translations") or {}).get("translations", []):
+            tr.setdefault(t.get("iso_639_1"), t.get("data") or {})
+
+        def text(field, own):
+            """first preferred language that has the text; the film's own language has it in original_title"""
+            for lang in self.prefer:
+                v = (tr.get(lang) or {}).get(field)
+                if not v and field == "title" and lang == m.get("original_language"):
+                    v = m.get("original_title")
+                if v:
+                    return v
+            return m.get(own)
         f.set_details(
-            "tmdb", title=m.get("title"), originaltitle=m.get("original_title"), plot=m.get("overview"),
-            tagline=m.get("tagline"), premiered=m.get("release_date"),
+            "tmdb", lang=self.tag, title=text("title", "title"), originaltitle=m.get("original_title"), plot=text("overview", "overview"),
+            tagline=text("tagline", "tagline"), premiered=m.get("release_date"),
             genres=[g["name"] for g in m.get("genres") or [] if g.get("name")],
             countries=[c["name"] for c in m.get("production_countries") or [] if c.get("name")],
             studios=[c["name"] for c in m.get("production_companies") or [] if c.get("name")],
             rating={"value": m.get("vote_average"), "max": 10, "votes": m.get("vote_count")}
             if m.get("vote_count") else None,
-            poster=IMG + "original" + m["poster_path"] if m.get("poster_path") else None,
-            fanart=IMG + "original" + m["backdrop_path"] if m.get("backdrop_path") else None,
+            poster=poster, fanart=fanart,
             characters={c["name"]: c["character"] for c in cast if c.get("name") and c.get("character")},
             thumbs={c["name"]: IMG + "h632" + c["profile_path"] for c in cast
                     if c.get("name") and c.get("profile_path")})

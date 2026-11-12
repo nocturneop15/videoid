@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -12,6 +13,11 @@ DEFAULTS = {
     "cache_days": 30,
     "tmdb_api_key": "",          # v3 API key or v4 read access token (free at themoviedb.org)
     "tmdb_language": "en-US",
+    # languages of what Kodi gets (title, plot, genres, posters), most preferred first; each text is taken in
+    # the first of them that has it. No default: you enter them on the first run (videoid languages changes
+    # them); until then tmdb_language is used. Czech/Slovak first also puts ČSFD first, unless kodi.prefer is
+    # set yourself.
+    "scrape_language": [],
     "sources": {"wikidata": True, "tmdb": True, "imdb": True, "csfd": True},
     "scan": {
         "open_minutes": 6.0,     # how much of the beginning to scan for opening titles
@@ -77,6 +83,88 @@ def _deep_update(base, upd):
             _deep_update(base[k], v)
         else:
             base[k] = v
+
+
+TMDB_REGION = {"cs": "cs-CZ", "sk": "sk-SK", "en": "en-US", "de": "de-DE", "fr": "fr-FR", "it": "it-IT",
+               "es": "es-ES", "pl": "pl-PL", "hu": "hu-HU", "pt": "pt-PT", "ru": "ru-RU", "uk": "uk-UA",
+               "ja": "ja-JP", "zh": "zh-CN", "ko": "ko-KR", "nl": "nl-NL", "sv": "sv-SE", "da": "da-DK",
+               "fi": "fi-FI", "no": "no-NO", "nb": "nb-NO"}
+
+
+_LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2})?$")
+
+
+def parse_langs(value):
+    """'cs, sk, en' / ['cs', 'sk', 'en'] / 'cs sk en' -> ['cs', 'sk', 'en'] (None if a code is not valid)."""
+    items = value if isinstance(value, list) else re.split(r"[\s,;]+", str(value or ""))
+    out = []
+    for it in items:
+        it = str(it).strip().lower()
+        if not it:
+            continue
+        if not _LANG_RE.match(it):
+            return None
+        if it not in out:
+            out.append(it)
+    return out
+
+
+def scrape_langs(cfg):
+    """Preferred metadata languages, most preferred first, as two-letter codes."""
+    langs = parse_langs(cfg.get("scrape_language")) or []
+    langs = list(dict.fromkeys(lang[:2] for lang in langs))
+    return langs or [str(cfg.get("tmdb_language") or "en")[:2].lower()]
+
+
+def scrape_lang(cfg):
+    return scrape_langs(cfg)[0]
+
+
+def tmdb_lang(cfg):
+    """TMDB request language: the first preferred one with its region (cs -> cs-CZ)."""
+    full = parse_langs(cfg.get("scrape_language")) or []
+    if not full:
+        return cfg.get("tmdb_language") or "en-US"
+    first = full[0]
+    return f"{first[:2]}-{first[3:].upper()}" if "-" in first else TMDB_REGION.get(first, first)
+
+
+def ask_languages(cfg, force=False):
+    """First run: the user's order of metadata languages (saved to config.json, not asked again)."""
+    import sys
+    if not sys.stdin or not sys.stdin.isatty():
+        return cfg
+    chosen = parse_langs(cfg.get("scrape_language")) or []
+    if chosen and not force:
+        return cfg
+    print("\nMetadata languages: titles, plots, genres and posters for Kodi are taken in the first of these\n"
+          "  languages that has them. Enter two-letter codes, most preferred first, e.g. cs, sk, en\n"
+          "  (cs Czech, sk Slovak, en English, de German, pl Polish, fr French, ...)")
+    keep = f" [Enter = keep {', '.join(chosen)}]" if chosen else ""
+    while True:
+        try:
+            val = input(f"  languages{keep}: ").strip()
+        except EOFError:
+            return cfg
+        if not val and chosen:
+            return cfg
+        langs = parse_langs(val)
+        if langs:
+            break
+        print("  enter at least one two-letter language code, most preferred first, e.g. cs, sk, en")
+    set_value("scrape_language", json.dumps(langs))
+    cfg["scrape_language"] = langs
+    print("  saved: " + ", ".join(langs) + " (change it later with 'videoid languages')")
+    return cfg
+
+
+def apply_scrape_language(cfg, prefer_given=False):
+    """Czech / Slovak: ČSFD has the local titles and plots, so it comes first - unless the user chose kodi.prefer."""
+    user_prefer = "prefer" in (_user_part().get("kodi") or {})
+    if scrape_lang(cfg) in ("cs", "sk") and not user_prefer and not prefer_given:
+        p = list(cfg["kodi"].get("prefer") or ["tmdb", "csfd"])
+        cfg["kodi"]["prefer"] = ["csfd"] + [s for s in p if s != "csfd"]
+    return cfg
 
 
 def load():

@@ -477,6 +477,8 @@ def main(argv=None):
     s.add_argument("--json", help="also write results to this JSON file")
     s.add_argument("--kodi", action="store_true", help="also write Kodi .nfo + poster/fanart for identified files")
     s.add_argument("--overwrite-nfo", action="store_true", help="with --kodi: replace NFOs not written by VideoID")
+    s.add_argument("--scrape-lang", metavar="LANGS", help="languages of the titles, plots, genres and posters written "
+                   "with --kodi / --rename, most preferred first, e.g. cs,sk,en (default from config scrape_language)")
     s.add_argument("-i", "--interactive", action="store_true",
                    help="when a film is not CERTAIN, ask which film it is (only CERTAIN films get Kodi files)")
     s.add_argument("--rename", action="store_true",
@@ -503,6 +505,8 @@ def main(argv=None):
     s = sub.add_parser("kodi", aliases=["nfo"], help="write Kodi .nfo + poster/fanart next to identified files")
     s.add_argument("paths", nargs="+", help="files, folders (everything analysed below) or database ids")
     s.add_argument("--min-verdict", help="CERTAIN (default), PROBABLE or POSSIBLE")
+    s.add_argument("--scrape-lang", metavar="LANGS", help="languages of titles, plots, genres and posters, most "
+                   "preferred first, e.g. cs,sk,en (default from config scrape_language)")
     s.add_argument("--prefer", help="metadata source order, e.g. csfd,tmdb (default from config kodi.prefer)")
     s.add_argument("--no-artwork", action="store_true", help="NFO only, no poster/fanart download")
     s.add_argument("--overwrite", action="store_true",
@@ -517,6 +521,7 @@ def main(argv=None):
 
     sub.add_parser("doctor", help="check ffmpeg, GPU OCR, LLM and database")
     sub.add_parser("keys", help="enter / change API keys (also re-asks skipped ones)")
+    sub.add_parser("languages", help="choose the metadata languages, most preferred first (e.g. cs, sk, en)")
 
     # "scan" is the default command: `videoid D:\Movies --kodi` == `videoid scan D:\Movies --kodi`
     argv = _repair_argv(sys.argv[1:]) if argv is None else list(argv)
@@ -529,7 +534,18 @@ def main(argv=None):
     if args.cmd == "keys":
         config.ask_keys(cfg, force=True)
         return 0
+    if args.cmd == "languages":
+        config.ask_languages(cfg, force=True)
+        return 0
+    if getattr(args, "scrape_lang", None):
+        langs = config.parse_langs(args.scrape_lang)
+        if not langs:
+            ap.error("--scrape-lang: two-letter language codes, most preferred first, e.g. cs,sk,en")
+        cfg["scrape_language"] = langs
     if args.cmd in ("scan", "doctor") and not getattr(args, "offline", False):
         cfg = config.ask_keys(cfg)            # first start: ask for missing keys, skippable if non-essential
+    if args.cmd in ("scan", "kodi", "nfo") and not getattr(args, "scrape_lang", None):
+        cfg = config.ask_languages(cfg)       # first start: the user's order of metadata languages
+    config.apply_scrape_language(cfg, prefer_given=bool(getattr(args, "prefer", None)))
     return {"scan": cmd_scan, "kodi": cmd_kodi, "nfo": cmd_kodi, "show": cmd_show, "list": cmd_list, "export": cmd_export,
             "config": cmd_config, "doctor": cmd_doctor}[args.cmd](cfg, args)

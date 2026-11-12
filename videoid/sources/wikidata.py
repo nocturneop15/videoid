@@ -23,10 +23,11 @@ def _lit(s):
 class Wikidata:
     name = "wikidata"
 
-    def __init__(self, http, extra_langs=()):
+    def __init__(self, http, extra_langs=(), first=("en",)):
         self.http = http
-        # native-script labels for OCR languages (Hindi, Chinese, ...) are fetched as name aliases
-        self.langs = list(dict.fromkeys(["en", "mul", "cs", "sk", "de", "fr", *extra_langs]))
+        # native-script labels for OCR languages (Hindi, Chinese, ...) are fetched as name aliases;
+        # the preferred scraping language comes first, so its labels become the titles
+        self.langs = list(dict.fromkeys([*(first or ["en"]), "en", "mul", "cs", "sk", "de", "fr", *extra_langs]))
 
     def sparql(self, q):
         r = self.http.get(SPARQL, params={"query": q, "format": "json"},

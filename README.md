@@ -214,6 +214,7 @@ Kodi picks these up with "Local information only", or with any scraper (which us
 | option / config | default | |
 |---|---|---|
 | `--min-verdict` / `kodi.min_verdict` | `CERTAIN` | `PROBABLE` writes more, with more risk; `POSSIBLE` for everything |
+| `--scrape-lang` / `scrape_language` | none (you enter it) | languages of titles, plots, genres and posters, most preferred first, e.g. `cs,sk,en` (asked on the first run, `videoid languages` changes it); each text comes in the first language that has it; Czech/Slovak first also puts ČSFD first |
 | `--prefer` / `kodi.prefer` | `tmdb,csfd` | which database's title, plot, genres and artwork come first; `csfd,tmdb` gives Czech metadata |
 | `--no-artwork` / `kodi.artwork` | on | skip poster and fanart downloads |
 | `--overwrite` | off | replace a `<video>.nfo` or artwork that VideoID didn't write. The old NFO is kept as `.nfo.bak`. |
