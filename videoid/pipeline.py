@@ -549,7 +549,11 @@ def describe(db, fid, top=3, show_people=True):
                 bits.append("NFO id " + ",".join(ev["ids"]))
             if ev.get("title") and ev["title"].get("pair"):
                 bits.append(f"title {ev['title']['sim']}% via {ev['title']['pair'][2]}")
-            if ev.get("year"):
+            if ev.get("name_year"):
+                bits.append("title + year match the " + {"filename": "file name", "folder": "folder name", "nfo": "NFO",
+                                                        "embedded": "file's metadata", "user": "name you typed"}
+                            .get(ev["name_year"], ev["name_year"]))
+            elif ev.get("year"):
                 bits.append(f"year diff {ev['year']['diff']}")
             if ev.get("runtime"):
                 bits.append(f"runtime diff {ev['runtime']['diff']} min")

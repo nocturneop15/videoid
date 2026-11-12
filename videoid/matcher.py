@@ -20,6 +20,7 @@ from .textutil import CASED, compact, norm, script_of, title_sim
 ROLE_WEIGHT = {"director": 10, "composer": 6, "dop": 4, "writer": 4, "editor": 3, "producer": 3,
                "exec_producer": 2, "production_designer": 2.5, "costume": 2, "casting": 2, "sound": 1.5,
                "dramaturg": 2, "cast": 2, "crew": 1}
+NAME_YEAR_BONUS = 8
 KEY_ROLES = {"director", "composer", "dop", "writer", "editor"}
 
 
@@ -286,6 +287,14 @@ class Matcher:
             nfo = [abs(f.year - y) for y, src in yrs if src == "nfo"]
             s += 6 if d == 0 else 3 if d == 1 else (-6 if nfo and min(nfo) > 2 else 0)
             det["year"] = {"film": f.year, "diff": d, "src": src}
+        # title AND exact year from the same name (file, folder, NFO, ...): much stronger than either alone
+        if f.year:
+            for src in dict.fromkeys(src for _, src in yrs if src != "ocr"):
+                if f.year in [y for y, s2 in yrs if s2 == src] and max(
+                        (title_sim(t, ft) for t, s2 in ev["titles"] if s2 == src for ft in f.titles), default=0) >= 92:
+                    s += NAME_YEAR_BONUS
+                    det["name_year"] = src
+                    break
         if f.runtime and ev.get("runtime"):
             d = abs(f.runtime - ev["runtime"])
             s += 4 if d <= 3 else 2 if d <= 8 else -4 if d > 25 else 0
@@ -338,8 +347,10 @@ class Matcher:
             dir_hit = any(p["role"] == "director" for p in ppl)
             n = len(ppl)
             exact_ty = (e["title"]["sim"] >= 92 and e["year"] and e["year"]["diff"] == 0)
+            run_ok = e["runtime"] and e["runtime"]["diff"] <= 5
             strong = ((dir_hit and n >= 3) or n >= 5 or (len(key) >= 2 and n >= 3)
-                      or (e["ids"] and (n >= 2 or exact_ty)))
+                      or (e["ids"] and (n >= 2 or exact_ty))
+                      or (e.get("name_year") and (n >= 2 or (n >= 1 and run_ok))))
             s1 = r["score"]
             other = s2 if i == 0 else ranked[0]["score"]
             margin = s1 - other

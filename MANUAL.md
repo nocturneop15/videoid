@@ -181,7 +181,7 @@ The verdict in brackets says how sure VideoID is:
 
 | verdict | meaning | what to do |
 |---|---|---|
-| **CERTAIN** | many people from the credits match (e.g. the director and 2 more, or 5+ people), clearly more than any other film | nothing, it's right |
+| **CERTAIN** | many people from the credits match (e.g. the director and 2 more, or 5+ people), or the file or folder name has the film's exact title and year and the credits confirm it (2 people, or 1 person and the right length); clearly more than any other film | nothing, it's right |
 | **PROBABLE** | a good match, but with less evidence | usually right; confirm it with `--interactive` to get Kodi files |
 | **POSSIBLE** | weak evidence, e.g. only the title fits | check it yourself |
 | **UNKNOWN** | nothing found | see [Troubleshooting](#12-troubleshooting) |
