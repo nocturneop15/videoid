@@ -15,7 +15,7 @@ DEFAULTS = {
     "sources": {"wikidata": True, "tmdb": True, "imdb": True, "csfd": True},
     "scan": {
         "open_minutes": 6.0,     # how much of the beginning to scan for opening titles
-        "end_minutes": 12.0,     # how much of the end to scan for end credits
+        "end_minutes": 6.0,      # how much of the end to scan for end credits
         "fps_open": 0.5,         # frames read per second: 0.5 = one every 2 s (credits stay on screen longer)
         "fps_end": 0.5,
         "min_width": 1920,       # small videos are upscaled (lanczos) for better OCR - SD credit text is tiny

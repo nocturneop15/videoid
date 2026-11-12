@@ -96,7 +96,7 @@ Put paths with spaces in quotes. In PowerShell, single quotes work too: `'X:\Dok
 2. If the film has text subtitles, the characters' names in the dialogue are checked first. That can
    identify it in seconds, without reading the screen (see [Subtitles](#subtitles-the-fastest-way)).
 3. If an NFO is there, a quick check runs next (see [section 7](#7-films-that-already-have-an-nfo)).
-4. Otherwise, the first 6 and last 12 minutes are scanned, one frame every 2 seconds, and all text is read.
+4. Otherwise, the first 6 and last 6 minutes are scanned, one frame every 2 seconds, and all text is read.
 5. The names found (director, actors, crew) are looked up in the film databases.
 6. The best match is printed and saved.
 
@@ -117,7 +117,7 @@ continue later. Files under 50 MB and files with "sample" in the name are skippe
 | `videoid film.mkv --force` | scan an already identified film again from scratch |
 | `videoid D:\Movies --rematch` | reuse the stored text, look the films up in the databases again (fast) |
 | `videoid D:\Movies --no-ocr` | use only file names and NFOs (very fast, less reliable) |
-| `videoid film.mkv --end 20` | scan the last 20 minutes instead of 12 (long end credits) |
+| `videoid film.mkv --end 15` | scan the last 15 minutes instead of 6 (long end credits, or an epilogue after the story) |
 | `videoid film.mkv --open 10` | scan the first 10 minutes instead of 6 |
 | `videoid film.mkv --fps 1` | read a frame every second instead of every 2 seconds (slower, for very fast credits) |
 | `videoid D:\Movies --lang latin,ja` | also read Japanese (see [Languages](#languages)) |
@@ -397,7 +397,7 @@ The ones you are most likely to want:
 | setting | default | |
 |---|---|---|
 | `scan.open_minutes` | `6` | minutes of the beginning to scan (`0` = skip the opening) |
-| `scan.end_minutes` | `12` | minutes of the end to scan |
+| `scan.end_minutes` | `6` | minutes of the end to scan |
 | `scan.min_size_mb` | `50` | smaller files are skipped |
 | `scan.log_file` | `true` | log file next to each film |
 | `scan.subtitle_characters` | `3` | characters the subtitles must name to accept a film; `0` = off |

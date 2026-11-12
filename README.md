@@ -7,7 +7,7 @@ Portable tool that identifies movie files. It combines several sources of eviden
 1. **File and folder name** (parsed with guessit: title, year, release junk removed)
 2. **NFO files** in the same folder (Kodi XML or scene NFO): IMDb, TMDB and ČSFD links, title, year and people
 3. **Container metadata** (embedded title tag) and **runtime**
-4. **OCR of the opening titles and end credits**. It reads the first 6 and last 12 minutes and samples one frame every 2 s (`--fps 1` for every second).
+4. **OCR of the opening titles and end credits**. It reads the first 6 and last 6 minutes and samples one frame every 2 s (`--fps 1` for every second).
    Black frames and repeated static frames are skipped. Only unique strings are kept.
 5. **Credits parsing**. Role headers in ~10 languages (EN/CZ/SK/DE/FR/IT/ES/PL/HU), e.g. "Directed by", "Režie",
    "Hudba", "Kamera", "Hrají", become director, producer, composer, writer, DoP, editor,
