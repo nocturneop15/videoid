@@ -14,6 +14,7 @@ from . import localinfo, media
 from .credits import CreditCollector, llm_extract
 from .db import now
 from .film import Film
+from .textutil import title_sim
 from .log import log
 
 
@@ -37,6 +38,7 @@ class Context:
         self.cfg, self.db, self.http, self.matcher = cfg, db, http, matcher
         self._ocr_factory, self._engines = ocr_factory, None
         self.llm = llm
+        self.cached = False         # set by process_file: the last file was skipped as already analysed
 
     def ocr_engines(self):
         """ocr.workers independent OCR objects (each with its own ONNX sessions). Built one after another
@@ -157,14 +159,15 @@ def _segments_raw(duration, sc):
     return [("open", 0, o, sc["fps_open"]), ("end", max(0, duration - e), e, sc["fps_end"])]
 
 
-def run_ocr(ctx, path, info):
-    """OCR the opening/end segments. Returns [(segment, t, boxes)] for frames that contain text."""
+def run_ocr(ctx, path, info, segments=None):
+    """OCR the opening/end segments (or the given [(segment, start, length, fps)]).
+    Returns [(segment, t, boxes)] for frames that contain text."""
     sc = ctx.cfg["scan"]
     t0 = time.time()
     stats = {"frames": 0, "ocr_frames": 0}
     out = []
     with OcrRunner(ctx.ocr_engines()) as runner:
-        for seg, start, length, fps in _segments(info["duration"], sc):
+        for seg, start, length, fps in segments or _segments(info["duration"], sc):
             frames = media.frames(path, start, length, fps, info, sc)
             if runner.parallel:
                 frames = _prefetch(frames)
@@ -295,6 +298,7 @@ def process_file(ctx, path, opts):
     unchanged = row is not None and row["size"] == st.st_size
     if unchanged and row["matched_at"] and not (opts.force or opts.rematch or opts.reparse):
         log(f"\n== {path}  (cached, use --rematch / --reparse / --force to redo)", 0)
+        ctx.cached = True
         return row["id"]
 
     log(f"\n== {path}", 0)
@@ -310,7 +314,7 @@ def process_file(ctx, path, opts):
     fid = db.file_upsert(str(path), size=st.st_size, mtime=st.st_mtime, oshash=h, duration=info["duration"],
                          width=info["width"], height=info["height"], local_json=json.dumps(local, ensure_ascii=False))
 
-    people, meta = [], {}
+    people, meta, ranked = [], {}, None
     if opts.ocr:
         stored = db.frames(fid) if unchanged and row["ocr_done"] and not opts.force else []
         if stored and opts.reparse:
@@ -323,13 +327,18 @@ def process_file(ctx, path, opts):
             meta = json.loads(row["ocr_meta_json"] or "{}")
             log(f"  reusing stored OCR: {len(people)} people", 1)
         else:
-            frames, stats = run_ocr(ctx, path, info)
-            db.save_frames(fid, frames)
-            lines, people, meta = parse_frames(ctx, frames, stats)
-            db.save_ocr(fid, lines, people, meta)
+            ranked = quick_nfo_check(ctx, path, info, local, fid, opts)
+            if ranked is None:
+                frames, stats = run_ocr(ctx, path, info)
+                db.save_frames(fid, frames)
+                lines, people, meta = parse_frames(ctx, frames, stats)
+                db.save_ocr(fid, lines, people, meta)
+            else:
+                meta = json.loads(db.file_get(fid)["ocr_meta_json"] or "{}")
 
-    ev = build_evidence(local, info, people, meta)
-    ranked = ctx.matcher.identify(ev)
+    if ranked is None:
+        ev = build_evidence(local, info, people, meta)
+        ranked = ctx.matcher.identify(ev)
     store = [{"film_key": r["film_key"], "score": r["score"], "confidence": r.get("confidence", 0),
               "verdict": r.get("verdict", "POSSIBLE"), "evidence": r["evidence"]} for r in ranked[:5]]
     db.save_matches(fid, store)
@@ -345,6 +354,56 @@ def process_file(ctx, path, opts):
     log(f"  total time: {fmt_duration(time.time() - t_start)}"
         + (f" (OCR {fmt_duration(ocr_s)})" if ocr_s else ""), 0)
     return fid
+
+
+def quick_nfo_check(ctx, path, info, local, fid, opts):
+    """A foreign NFO next to the movie names the film: confirm it cheaply from the end credits only, sampled
+    every few seconds. The film is identified from the credits ALONE (no NFO, no file name - films sharing actors
+    must not confirm each other) and the NFO is accepted only when that lands on the NFO's film.
+    Returns the ranked matches (full evidence) when verified, else None (-> normal full scan)."""
+    sc = ctx.cfg["scan"]
+    every = float(sc.get("nfo_check_every", 3) or 0)
+    nfo_titles = [t for t, src in local.get("titles", []) if src == "nfo"]
+    if (not local.get("nfo_files") or not (local.get("ids") or nfo_titles) or every <= 0
+            or not getattr(opts, "quick_nfo", True) or not info.get("duration")):
+        return None
+    end = [s for s in _segments(info["duration"], sc) if s[0] == "end"]
+    if not end:
+        return None
+    seg, start, length, _ = end[0]
+    log(f"  NFO found - quick check: end credits only, one frame every {every:g} s", 0)
+    frames, stats = run_ocr(ctx, path, info, [(seg, start, length, 1.0 / every)])
+    lines, people, meta = parse_frames(ctx, frames, stats)
+    need = int(sc.get("nfo_check_people", 3))
+    why = f"only {len(people)} people read from the credits"
+    if len(people) >= need:
+        log("  identifying from the credits alone:", 1)
+        blank = {"titles": [], "years": [], "ids": {}, "people": []}
+        alone = ctx.matcher.identify(build_evidence(blank, info, people, meta))
+        if not alone:
+            why = "the credits alone match no film"
+        else:
+            b = alone[0]
+            f, n = b["film"], len(b["evidence"]["people"])
+            name = f"{f.title} ({f.year or '?'})"
+            ids = local.get("ids") or {}
+            same = (any(f.ids.get(k) == str(v) for k, v in ids.items()) if ids else
+                    max((title_sim(t, ft) for t in nfo_titles for ft in f.titles), default=0) >= 90)
+            if b["verdict"] not in ("CERTAIN", "PROBABLE") or n < need:
+                why = f"credits alone not conclusive: {name}, {b['verdict']}, {n} people"
+            elif not same:
+                why = f"the credits are {name} ({n} people), not the NFO's film"
+            else:
+                ranked = ctx.matcher.identify(build_evidence(local, info, people, meta))
+                if ranked and ranked[0]["film_key"] == b["film_key"]:
+                    log(f"  NFO verified: the end credits alone identify {name} ({n} people, {b['verdict']})", 0)
+                    meta["nfo_verified"] = True
+                    ctx.db.save_frames(fid, frames)
+                    ctx.db.save_ocr(fid, lines, people, meta)
+                    return ranked
+                why = "NFO and credits together point elsewhere"
+    log(f"  NFO NOT verified ({why}) - full scan", 0)
+    return None
 
 
 def fmt_duration(s):

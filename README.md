@@ -137,12 +137,50 @@ videoid.cmd scan D:\Movies --rematch          # reuse stored OCR, query database
 videoid.cmd scan D:\Movies --no-ocr           # file name + NFO only (fast)
 videoid.cmd scan X --end 15 --open 10 --fps 2 # scan more of the film
 videoid.cmd scan X --json result.json
+videoid.cmd scan D:\Movies --rename           # rename identified movies to "Title (Year)"
 
 videoid.cmd list [--verdict POSSIBLE]
 videoid.cmd show film.mkv --people --ocr      # stored result, people read, unique OCR strings
 videoid.cmd export library.csv | library.json
 videoid.cmd config [key [value]]              # e.g. config scan.end_minutes 15
 ```
+
+### Log file per movie
+
+Each scan appends its output for a movie to **`<movie>.log`** next to it, for example `Film (2001).log`.
+The log holds what was read and searched, the result, and any rename or Kodi files written. Files skipped
+as already identified only get an entry when something is renamed or written. To turn it off, use
+`--no-log` or `config scan.log_file false`.
+
+### Movies with an NFO: quick check
+
+If a movie has an NFO that VideoID didn't write, it is checked first, not fully scanned. VideoID reads
+only the end credits, one frame every 3 seconds, and identifies the film **from the credits alone**,
+ignoring the NFO and file name. The NFO is accepted only when that lands on the NFO's film with at
+least 3 people matched. The log then says `NFO verified`. Otherwise it says `NFO NOT verified (...)`
+and the normal full scan runs.
+
+The check ignores the NFO on purpose: films sharing actors would otherwise confirm each other. The check
+takes roughly a quarter of the full scan's OCR time.
+
+| option / config | default | |
+|---|---|---|
+| `scan.nfo_check_every` | `3` | seconds between checked frames; `0` always does the full scan |
+| `scan.nfo_check_people` | `3` | people the credits must match |
+| `--no-quick` | off | full scan even when an NFO is present |
+
+### Renaming
+
+`scan --rename` renames each identified movie to `Title (Year)`. The files belonging to it move along:
+the same name plus `.nfo`, `.srt`, `.cs.srt`, `.log`, and `-poster.jpg` / `-fanart.jpg` etc. Other
+videos and `movie.nfo` stay as they are. The title is the one Kodi gets, in the `kodi.prefer` order,
+so put `csfd` first for Czech titles. Nothing is ever overwritten: if the target name exists, the file
+is left as it is. The old name is recorded in the movie's log.
+
+| config | default | |
+|---|---|---|
+| `rename.min_verdict` | `CERTAIN` | `PROBABLE` renames more, with more risk |
+| `rename.pattern` | `{title} ({year})` | also `{originaltitle}`, e.g. `{title} ({year}) - {originaltitle}` |
 
 ## Kodi metadata
 

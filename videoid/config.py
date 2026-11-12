@@ -24,6 +24,12 @@ DEFAULTS = {
         "scale_flags": "lanczos",
         "hwaccel": "auto",       # auto | d3d11va | dxva2 | none
         "min_size_mb": 50,       # skip smaller files (samples, extras)
+        "log_file": True,        # append each run's output to <movie>.log next to the movie (scan --no-log)
+        # a foreign NFO next to the movie is first only checked: end credits, one frame every N seconds;
+        # it is accepted when the credits confirm the NFO's film with at least nfo_check_people names,
+        # otherwise the normal full scan runs (scan --no-quick always does the full scan)
+        "nfo_check_every": 3,    # 0 = always full scan
+        "nfo_check_people": 3,
         "extensions": ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "mpg", "mpeg", "ts",
                        "m2ts", "mts", "vob", "webm", "flv", "ogm", "divx", "3gp", "rmvb"],
     },
@@ -45,6 +51,10 @@ DEFAULTS = {
     #   min_verdict: write only for CERTAIN / PROBABLE / POSSIBLE matches and better
     #   prefer: which database's plot, genres, title and artwork to use first (e.g. ["csfd", "tmdb"] for Czech)
     "kodi": {"min_verdict": "PROBABLE", "artwork": True, "prefer": ["tmdb", "csfd"]},
+    # scan --rename: the movie and its same-named subtitles / NFO / artwork / log get the pattern's name;
+    #   {title} is the title Kodi gets (kodi.prefer order - put csfd first for Czech titles), also
+    #   {originaltitle} and {year}; only matches at least min_verdict sure are renamed
+    "rename": {"min_verdict": "CERTAIN", "pattern": "{title} ({year})"},
     "skipped_keys": [],          # optional API keys the user chose not to enter (not asked again)
     "llm": {
         # Optional local LLM (Ollama / LM Studio / any OpenAI-compatible server) to read credits.

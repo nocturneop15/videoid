@@ -104,6 +104,16 @@ class DB:
         self.con.commit()
         return fid
 
+    def file_move(self, fid, path):
+        """The file was renamed: its record follows (a stale record of a file gone from that path is dropped)."""
+        old = self.con.execute("SELECT id FROM files WHERE path=? AND id<>?", (path, fid)).fetchone()
+        if old:
+            for t in ("ocr_frames", "ocr_lines", "people", "matches"):
+                self.con.execute(f"DELETE FROM {t} WHERE file_id=?", (old["id"],))
+            self.con.execute("DELETE FROM files WHERE id=?", (old["id"],))
+        self.con.execute("UPDATE files SET path=? WHERE id=?", (path, fid))
+        self.con.commit()
+
     def file_get(self, fid):
         return self.con.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
 

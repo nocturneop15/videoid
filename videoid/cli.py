@@ -73,24 +73,15 @@ def cmd_scan(cfg, args):
         log("note: no TMDB key - credits come from Wikidata, CSFD and IMDb top stars only ('videoid keys')", 1)
     ctx = _ctx(cfg, args, need_ocr=args.ocr)
     results = []
+    write_logs = args.log_file and sc.get("log_file", True)
     for path in iter_videos(args.paths, cfg, recursive=not args.no_recursive):
-        try:
-            fid = process_file(ctx, path, args)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            log(f"  ERROR {path}: {e!r}", 0)
-            if logmod.VERBOSITY >= 2:
-                import traceback
-                traceback.print_exc()
-            continue
+        with logmod.capture() as lines:
+            fid, worth_logging = _scan_one(ctx, cfg, path, args, describe, process_file)
         if fid:
             results.append(fid)
-            print(describe(ctx.db, fid, top=args.top), flush=True)
-            if args.kodi:
-                from .kodi import write_for_file
-                print("   kodi: " + write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"],
-                                                  overwrite=args.overwrite_nfo), flush=True)
+        if write_logs and worth_logging:
+            from .filing import write_log
+            write_log(Path(ctx.db.file_get(fid)["path"]) if fid else path, lines)   # follows a rename
     if len(results) > 1:
         log(f"\n{len(results)} files in {fmt_duration(time.time() - t_all)}", 0)
     if args.json:
@@ -98,6 +89,37 @@ def cmd_scan(cfg, args):
                                               ensure_ascii=False), encoding="utf-8")
         log(f"\nwrote {args.json}", 0)
     return 0
+
+
+def _scan_one(ctx, cfg, path, args, describe, process_file):
+    """Identify one movie, print the result, rename it and write Kodi files.
+    Returns (database id, whether anything happened that belongs in the movie's log file)."""
+    ctx.cached = False
+    try:
+        fid = process_file(ctx, path, args)
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        log(f"  ERROR {path}: {e!r}", 0)
+        if logmod.VERBOSITY >= 2:
+            import traceback
+            traceback.print_exc()
+        return None, True
+    if not fid:
+        return None, False
+    logmod.out(describe(ctx.db, fid, top=args.top))
+    changed = not ctx.cached                 # a cached result was logged when it was made
+    if args.rename:
+        from .filing import rename_movie
+        new, status = rename_movie(ctx.db, fid, ctx.matcher, cfg["rename"], cfg["kodi"].get("prefer"))
+        logmod.out("   rename: " + status)
+        changed = changed or new is not None
+    if args.kodi:
+        from .kodi import write_for_file
+        status = write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"], overwrite=args.overwrite_nfo)
+        logmod.out("   kodi: " + status)
+        changed = changed or status.startswith("wrote")
+    return fid, changed
 
 
 def _file_record(db, fid):
@@ -322,6 +344,12 @@ def main(argv=None):
     s.add_argument("--json", help="also write results to this JSON file")
     s.add_argument("--kodi", action="store_true", help="also write Kodi .nfo + poster/fanart for identified files")
     s.add_argument("--overwrite-nfo", action="store_true", help="with --kodi: replace NFOs not written by VideoID")
+    s.add_argument("--rename", action="store_true",
+                   help="rename identified movies (and their subtitles, NFO, artwork) to 'Title (Year)'")
+    s.add_argument("--no-log", dest="log_file", action="store_false",
+                   help="do not write <movie>.log next to each movie")
+    s.add_argument("--no-quick", dest="quick_nfo", action="store_false",
+                   help="always do the full scan, even when an NFO names the film")
 
     s = sub.add_parser("show", help="show stored result for a file (path, part of path or id)")
     s.add_argument("file")
