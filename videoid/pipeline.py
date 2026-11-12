@@ -418,6 +418,8 @@ def describe(db, fid, top=3, show_people=True):
     if not ms:
         out.append("   no match found")
         return "\n".join(out)
+    if row["verdict"] == "UNKNOWN":
+        out.append("   you marked these candidates as wrong (--interactive): UNKNOWN")
     for m in ms[:top]:
         fj = db.film_json(m["film_key"]) or {}
         f = Film.from_dict(fj)
@@ -437,7 +439,7 @@ def describe(db, fid, top=3, show_people=True):
                     out.append(f"        {p['role']:<20} {p['db']}" + (f"   (read: {p['ocr']})" if p["ocr"] != p["db"] else ""))
                 if len(ev["people"]) > 25:
                     out.append(f"        ... +{len(ev['people']) - 25} more")
-            bits = []
+            bits = ["chosen by you (--interactive)"] if ev.get("chosen_by_user") else []
             if ev.get("ids"):
                 bits.append("NFO id " + ",".join(ev["ids"]))
             if ev.get("title") and ev["title"].get("pair"):

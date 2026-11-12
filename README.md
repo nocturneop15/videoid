@@ -140,6 +140,7 @@ videoid.cmd scan D:\Movies --no-ocr           # file name + NFO only (fast)
 videoid.cmd scan X --end 15 --open 10 --fps 2 # scan more of the film
 videoid.cmd scan X --json result.json
 videoid.cmd scan D:\Movies --rename           # rename identified movies to "Title (Year)"
+videoid.cmd scan D:\Movies -i                 # --interactive: ask which film it is when not CERTAIN
 
 videoid.cmd list [--verdict POSSIBLE]
 videoid.cmd show film.mkv --people --ocr      # stored result, people read, unique OCR strings

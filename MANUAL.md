@@ -111,6 +111,7 @@ continue later. Files under 50 MB and files with "sample" in the name are skippe
 | `videoid D:\Movies --kodi` | also write Kodi metadata (section 5) |
 | `videoid D:\Movies --rename` | also rename identified films (section 6) |
 | `videoid D:\Movies --kodi --rename` | both |
+| `videoid D:\Movies --interactive` | ask you which film it is when VideoID isn't sure (see [section 4](#choosing-the-film-yourself---interactive)) |
 | `videoid film.mkv --force` | scan an already identified film again from scratch |
 | `videoid D:\Movies --rematch` | reuse the stored text, look the films up in the databases again (fast) |
 | `videoid D:\Movies --no-ocr` | use only file names and NFOs (very fast, less reliable) |
@@ -178,6 +179,32 @@ The verdict in brackets says how sure VideoID is:
 - **WARNING** lines appear when the file name or NFO contradicts what the credits say. Take them seriously.
 
 After a folder, the total time is shown.
+
+### Choosing the film yourself: `--interactive`
+
+```
+videoid D:\Movies --interactive        # or -i
+```
+
+When a film is not CERTAIN and there are several candidates, VideoID stops and asks:
+
+```
+   Several possible films, file 52 min. Which one is it?
+    1) 2019: Cíl Měsíc (2009)  [POSSIBLE]  52 min, 0 people matched, also 2019, destination lune
+         https://www.csfd.cz/film/584914/
+    2) 2019, destination lune (2009)  [POSSIBLE]  1 person matched
+         https://www.imdb.com/title/tt1468821/
+   1-5 = this film, 0 = none of these, Enter = leave as it is:
+```
+
+- **A number:** that film becomes the result, as CERTAIN, so `--kodi` and `--rename` use it.
+  The result then says *chosen by you*.
+- **`0`:** none of them is right. The file is marked UNKNOWN and you won't be asked about it again.
+- **Enter:** leave it as it is. You'll be asked again on the next `--interactive` run.
+
+The links let you check a candidate in the browser before answering. Films already identified are
+asked about too, so `videoid D:\Movies -i` is a quick way to go through the uncertain ones from earlier
+scans. `--force` or `--rematch` replaces your choice with a new automatic result.
 
 ---
 

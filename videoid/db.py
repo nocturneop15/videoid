@@ -185,6 +185,37 @@ class DB:
                 json.dumps(m["evidence"], ensure_ascii=False)))
         self.con.commit()
 
+    def choose_match(self, fid, rank):
+        """The user picked candidate `rank` (scan --interactive): it becomes the CERTAIN winner, the rest move
+        down. rank None = none of them is right: the file becomes UNKNOWN, the candidates are kept."""
+        ms = self.matches(fid)
+        if rank is None:
+            for m in ms:
+                m["evidence"] = json.loads(m["evidence_json"])
+            if ms:
+                ms[0]["evidence"]["rejected_by_user"] = True        # don't ask again on the next run
+                self.save_matches(fid, ms)
+            self.file_upsert_id(fid, film_key=None, title=None, year=None, verdict="UNKNOWN", confidence=0,
+                                ids_json="{}")
+            return None
+        pick = ms.pop(rank)
+        ev = json.loads(pick["evidence_json"])
+        ev["chosen_by_user"] = True
+        ev["warnings"] = []
+        pick.update(verdict="CERTAIN", confidence=1.0, evidence=ev)
+        for m in ms:
+            m["evidence"] = json.loads(m["evidence_json"])
+        self.save_matches(fid, [pick] + ms)
+        film = self.film_json(pick["film_key"]) or {}
+        self.file_upsert_id(fid, film_key=pick["film_key"], title=film.get("title"), year=film.get("year"),
+                            verdict="CERTAIN", confidence=1.0, ids_json=json.dumps(film.get("ids") or {}))
+        return pick
+
+    def file_upsert_id(self, fid, **fields):
+        cols = ", ".join(f"{k}=?" for k in fields)
+        self.con.execute(f"UPDATE files SET {cols} WHERE id=?", (*fields.values(), fid))
+        self.con.commit()
+
     def matches(self, fid):
         return [dict(r) for r in self.con.execute(
             "SELECT * FROM matches WHERE file_id=? ORDER BY rank", (fid,))]

@@ -109,6 +109,8 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
         return None, False
     logmod.out(describe(ctx.db, fid, top=args.top))
     changed = not ctx.cached                 # a cached result was logged when it was made
+    if args.interactive and _ask_match(ctx.db, fid):
+        changed = True
     if args.rename:
         from .filing import rename_movie
         new, status = rename_movie(ctx.db, fid, ctx.matcher, cfg["rename"], cfg["kodi"].get("prefer"))
@@ -120,6 +122,51 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
         logmod.out("   kodi: " + status)
         changed = changed or status.startswith("wrote")
     return fid, changed
+
+
+def _ask_match(db, fid, limit=6):
+    """scan --interactive: when the result is not CERTAIN and there are several candidates, let the user pick.
+    Returns True when the stored result changed."""
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    ms = db.matches(fid)
+    if len(ms) < 2 or ms[0]["verdict"] == "CERTAIN":
+        return False
+    if json.loads(ms[0]["evidence_json"]).get("rejected_by_user"):
+        return False
+    row = db.file_get(fid)
+    file_min = f", file {row['duration'] / 60:.0f} min" if row["duration"] else ""
+    logmod.out(f"\n   Several possible films{file_min}. Which one is it?")
+    ms = ms[:limit]
+    for i, m in enumerate(ms, 1):
+        f = Film.from_dict(db.film_json(m["film_key"]) or {})
+        ev = json.loads(m["evidence_json"])
+        aka = [t for t in f.titles if t != f.title][:2]
+        bits = [f"{f.runtime} min" if f.runtime else None, (lambda n: f"{n} {'person' if n == 1 else 'people'} matched")(len(ev.get("people") or [])),
+                ("also " + " / ".join(aka)) if aka else None]
+        logmod.out(f"    {i}) {f.title} ({f.year or '?'})  [{m['verdict']}]  " + ", ".join(b for b in bits if b))
+        for k in ("imdb", "csfd", "tmdb"):
+            if k in f.urls():
+                logmod.out(f"         {f.urls()[k]}")
+    while True:
+        try:
+            ans = input(f"   1-{len(ms)} = this film, 0 = none of these, Enter = leave as it is: ").strip()
+        except EOFError:
+            ans = ""
+        if ans == "":
+            logmod.out("   left as it is")
+            return False
+        if ans.isdigit() and 0 <= int(ans) <= len(ms):
+            break
+        print(f"   type a number from 0 to {len(ms)}, or press Enter")
+    if ans == "0":
+        db.choose_match(fid, None)
+        logmod.out("   you chose: none of these - marked UNKNOWN")
+        return True
+    pick = db.choose_match(fid, int(ans) - 1)
+    f = db.film_json(pick["film_key"]) or {}
+    logmod.out(f"   you chose: {f.get('title')} ({f.get('year') or '?'}) - now CERTAIN")
+    return True
 
 
 def _file_record(db, fid):
@@ -344,6 +391,8 @@ def main(argv=None):
     s.add_argument("--json", help="also write results to this JSON file")
     s.add_argument("--kodi", action="store_true", help="also write Kodi .nfo + poster/fanart for identified files")
     s.add_argument("--overwrite-nfo", action="store_true", help="with --kodi: replace NFOs not written by VideoID")
+    s.add_argument("-i", "--interactive", action="store_true",
+                   help="when a film is not CERTAIN and there are several candidates, ask which one it is")
     s.add_argument("--rename", action="store_true",
                    help="rename identified movies (and their subtitles, NFO, artwork) to 'Title (Year)'")
     s.add_argument("--no-log", dest="log_file", action="store_false",
