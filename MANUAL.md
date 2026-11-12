@@ -93,10 +93,12 @@ Put paths with spaces in quotes. In PowerShell, single quotes work too: `'X:\Dok
 
 **What happens for each file:**
 1. The file name, folder name and any NFO file are read.
-2. If an NFO is there, a quick check runs first (see [section 7](#7-films-that-already-have-an-nfo)).
-3. Otherwise, the first 6 and last 12 minutes are scanned, one frame per second, and all text is read.
-4. The names found (director, actors, crew) are looked up in the film databases.
-5. The best match is printed and saved.
+2. If the film has text subtitles, the characters' names in the dialogue are checked first. That can
+   identify it in seconds, without reading the screen (see [Subtitles](#subtitles-the-fastest-way)).
+3. If an NFO is there, a quick check runs next (see [section 7](#7-films-that-already-have-an-nfo)).
+4. Otherwise, the first 6 and last 12 minutes are scanned, one frame per second, and all text is read.
+5. The names found (director, actors, crew) are looked up in the film databases.
+6. The best match is printed and saved.
 
 Expect roughly **3-6 minutes per film** on a mid-range graphics card. On a laptop with integrated
 graphics it can take 10-20 minutes. Each film shows its own time at the end.
@@ -119,6 +121,7 @@ continue later. Files under 50 MB and files with "sample" in the name are skippe
 | `videoid film.mkv --open 10` | scan the first 10 minutes instead of 6 |
 | `videoid D:\Movies --lang latin,ja` | also read Japanese (see [Languages](#languages)) |
 | `videoid D:\Movies --no-quick` | always scan fully, even when an NFO exists |
+| `videoid D:\Movies --no-subs` | don't try the subtitles first |
 | `videoid D:\Movies --no-log` | don't write the log file next to each film |
 | `videoid D:\Movies --cpu` | don't use the graphics card |
 | `videoid D:\Movies --no-recursive` | only this folder, not subfolders |
@@ -294,6 +297,31 @@ names are removed, and `:` becomes ` - `.
 
 ---
 
+### Subtitles: the fastest way
+
+Many films carry subtitles: as text tracks inside the file (SRT, ASS, MP4 text) or as a `.srt` file with
+the same name next to it. VideoID reads them first, which takes seconds instead of minutes:
+
+1. It collects the names spoken in the dialogue. Czech and Slovak endings are understood, so "Rentone" counts as Renton.
+2. It looks up the film by its file name, folder name and NFO, as usual.
+3. It compares the dialogue with the candidates' **character names** (from TMDB, and from Wikidata for
+   well-known films).
+
+The film is accepted, as CERTAIN, only when all of these hold:
+- the title in the file name matches;
+- at least 3 of the film's characters are named in the dialogue, each at least twice;
+- the film's known length fits the file;
+- no other film with the same characters (a sequel or remake) is nearly as likely.
+
+Then the log says `Subtitles confirm …` and no OCR is needed. Otherwise it says
+`Subtitles not conclusive (…)` and the normal checks run.
+
+Good to know:
+- **Picture subtitles don't count:** subtitles stored as pictures (PGS on Blu-ray rips, VobSub on DVD rips) would need OCR themselves, so they're skipped.
+- **A TMDB key helps a lot here:** TMDB knows the characters of almost every film, Wikidata only of well-known ones.
+- **The file name must point to the film:** subtitles don't help with files like `movie_final2.mkv`. Those still need the credits.
+- **Settings:** `--no-subs` skips this step; `videoid config scan.subtitle_characters 5` requires more characters, and `0` turns it off.
+
 ## 7. Films that already have an NFO
 
 Many films come with an NFO file saying what they are, but NFOs are sometimes wrong (copied from another
@@ -371,6 +399,7 @@ The ones you are most likely to want:
 | `scan.end_minutes` | `12` | minutes of the end to scan |
 | `scan.min_size_mb` | `50` | smaller files are skipped |
 | `scan.log_file` | `true` | log file next to each film |
+| `scan.subtitle_characters` | `3` | characters the subtitles must name to accept a film; `0` = off |
 | `scan.nfo_check_every` | `3` | quick NFO check: seconds between frames; `0` = off |
 | `ocr.languages` | `["latin"]` | scripts to read (section 3) |
 | `kodi.prefer` | `["tmdb", "csfd"]` | which database's title, plot and artwork come first |

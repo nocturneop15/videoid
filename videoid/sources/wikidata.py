@@ -33,6 +33,14 @@ class Wikidata:
                           headers={"Accept": "application/sparql-results+json"})
         return (r or {}).get("results", {}).get("bindings", [])
 
+    def characters(self, qid):
+        """Names of a film's characters (P674, or the character role of a cast member) in our languages."""
+        langs = ", ".join(_lit(l) for l in self.langs)
+        rows = self.sparql(f"""SELECT DISTINCT ?l WHERE {{
+              {{ wd:{qid} wdt:P674 ?c }} UNION {{ wd:{qid} p:P161 ?st . ?st pq:P453 ?c }}
+              ?c rdfs:label ?l . FILTER(LANG(?l) IN ({langs})) }}""")
+        return sorted({r["l"]["value"] for r in rows})
+
     def _search(self, query, limit):
         r = self.http.get(API, params={"action": "query", "list": "search", "srsearch": query,
                                        "srlimit": limit, "srnamespace": 0, "format": "json"})

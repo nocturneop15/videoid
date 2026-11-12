@@ -32,7 +32,11 @@ def probe(path):
     r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", str(path)], capture_output=True,
                        creationflags=CREATE_NO_WINDOW)
     txt = r.stderr.decode("utf-8", errors="replace")
-    info = {"duration": None, "width": None, "height": None, "dar": None, "title": None}
+    info = {"duration": None, "width": None, "height": None, "dar": None, "title": None, "subtitles": []}
+    # "Stream #0:3(cze): Subtitle: subrip (srt) (default) (forced)" / "Stream #0:3[0x4](ces): Subtitle: mov_text ..."
+    for m in re.finditer(r"Stream #0:(\d+)(?:\[\w+\])?(?:\((\w+)\))?: Subtitle: (\w+)([^\n]*)", txt):
+        info["subtitles"].append({"stream": int(m.group(1)), "lang": m.group(2) or "", "codec": m.group(3),
+                                  "forced": "(forced)" in m.group(4)})
     if m := re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", txt):
         info["duration"] = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
     head = txt.split("Stream #", 1)[0]

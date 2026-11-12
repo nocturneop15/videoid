@@ -10,7 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import localinfo, media
+from . import localinfo, media, subtitles
 from .credits import CreditCollector, llm_extract
 from .db import now
 from .film import Film
@@ -362,14 +362,16 @@ def process_file(ctx, path, opts):
             meta = json.loads(row["ocr_meta_json"] or "{}")
             log(ui.step(f"Reusing the credits read in an earlier scan: {len(people)} people"), 1)
         else:
-            ranked = quick_nfo_check(ctx, path, info, local, fid, opts)
+            ranked = subtitle_fast_track(ctx, path, info, local, opts)      # cheapest first: no OCR at all
             if ranked is None:
-                frames, stats = run_ocr(ctx, path, info)
-                db.save_frames(fid, frames)
-                lines, people, meta = parse_frames(ctx, frames, stats)
-                db.save_ocr(fid, lines, people, meta)
-            else:
-                meta = json.loads(db.file_get(fid)["ocr_meta_json"] or "{}")
+                ranked = quick_nfo_check(ctx, path, info, local, fid, opts)
+                if ranked is None:
+                    frames, stats = run_ocr(ctx, path, info)
+                    db.save_frames(fid, frames)
+                    lines, people, meta = parse_frames(ctx, frames, stats)
+                    db.save_ocr(fid, lines, people, meta)
+                else:
+                    meta = json.loads(db.file_get(fid)["ocr_meta_json"] or "{}")
 
     if ranked is None:
         ev = build_evidence(local, info, people, meta)
@@ -389,6 +391,63 @@ def process_file(ctx, path, opts):
     log(ui.detail(f"finished in {fmt_duration(time.time() - t_start)}"
                   + (f" (reading text {fmt_duration(ocr_s)})" if ocr_s else "")), 0)
     return fid
+
+
+def subtitle_fast_track(ctx, path, info, local, opts):
+    """Text subtitles: the film's character names in the dialogue confirm a candidate found by its title, so
+    no OCR is needed. Returns the ranked matches when that is conclusive, else None (-> NFO check / OCR)."""
+    sc = ctx.cfg["scan"]
+    need = int(sc.get("subtitle_characters", 3) or 0)
+    if need <= 0 or not getattr(opts, "subs", True):
+        return None
+    if not subtitles.text_tracks(info) and not subtitles.sidecars(path):
+        if info.get("subtitles"):
+            log(ui.detail("the subtitles are pictures (PGS / VobSub) - they would need OCR, skipped"), 1)
+        return None
+    log(ui.step("The film has text subtitles - looking for its characters' names in the dialogue first "
+                "(much faster than reading the credits)"), 0)
+    t0 = time.time()
+    lines, sources = subtitles.read(path, info)
+    words = subtitles.name_words(lines)
+    log(ui.detail(f"{len(lines)} subtitle lines from {', '.join(sources) or 'nothing readable'}, "
+                  f"{len(words)} different capitalised words, in {fmt_duration(time.time() - t0)}"), 1)
+    if len(lines) < 50:
+        log(ui.warn("too little subtitle text to go on - reading the credits instead"), 0)
+        return None
+    ev = build_evidence(local, info, [], {})
+    ranked = ctx.matcher.identify(ev)
+    if not ranked:
+        log(ui.warn("no candidate film from the file name - reading the credits instead"), 0)
+        return None
+    log(ui.step(f"Comparing the dialogue with the character names of {min(6, len(ranked))} candidate films"), 1)
+    for r in ranked[:6]:
+        r["characters"] = subtitles.character_hits(ctx.matcher.characters(r["film"]), words)
+        r["score"] += min(10, 2 * len(r["characters"]))
+    ranked[:6] = sorted(ranked[:6], key=lambda r: -r["score"])
+    top = ranked[0]
+    e, f, hits = top["evidence"], top["film"], top.get("characters", [])
+    name = f"{f.title} ({f.year or '?'})"
+    titled = bool(e.get("ids")) or (e.get("title") or {}).get("sim", 0) >= 92
+    rivals = [r["score"] for r in ranked[1:6] if len(r.get("characters", [])) >= need]
+    margin = top["score"] - max(rivals) if rivals else 99
+    # a misnamed file (the sequel's name on the original) would have the same characters - the length must fit
+    length_ok = not (e.get("runtime") and e["runtime"]["diff"] > 10)
+    if titled and len(hits) >= need and margin >= 6 and length_ok and not e.get("warnings"):
+        e["subtitles"] = {"characters": hits[:12], "sources": sources}
+        top["verdict"], top["confidence"] = "CERTAIN", max(top.get("confidence", 0), 0.99)
+        log(ui.good(f"Subtitles confirm {name}: {len(hits)} of its characters are named in the dialogue "
+                    f"({', '.join(hits[:6])}{', ...' if len(hits) > 6 else ''}) - no OCR needed"), 0)
+        return ranked
+    if not titled:
+        why = f"the file name doesn't name {name} clearly"
+    elif len(hits) < need:
+        why = f"only {len(hits)} of {name}'s known characters named in the dialogue"
+    elif not length_ok:
+        why = f"{name} is {e['runtime']['film']} min long, the file {e['runtime']['file']} min"
+    else:
+        why = "another film with the same characters scores almost as high (sequel or remake?)"
+    log(ui.warn(f"Subtitles not conclusive ({why}) - reading the credits instead"), 0)
+    return None
 
 
 def quick_nfo_check(ctx, path, info, local, fid, opts):
@@ -482,6 +541,10 @@ def describe(db, fid, top=3, show_people=True):
                 if len(ev["people"]) > 25:
                     out.append(f"        ... +{len(ev['people']) - 25} more")
             bits = ["chosen by you (--interactive)"] if ev.get("chosen_by_user") else []
+            if ev.get("subtitles"):
+                ch = ev["subtitles"]["characters"]
+                bits.append(f"{len(ch)} characters named in the subtitles ({', '.join(ch[:4])}"
+                            f"{', ...' if len(ch) > 4 else ''})")
             if ev.get("ids"):
                 bits.append("NFO id " + ",".join(ev["ids"]))
             if ev.get("title") and ev["title"].get("pair"):

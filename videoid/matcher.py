@@ -56,6 +56,16 @@ class Matcher:
         return ranked
 
     # ---------------------------------------------------------- candidates
+    def characters(self, film):
+        """Character names of a film: TMDB's cast list (needs a TMDB key) plus Wikidata's."""
+        out = list((film.details.get("tmdb") or {}).get("characters", {}).values())
+        if self.wd and "wikidata" in film.ids:
+            try:
+                out += self.wd.characters(film.ids["wikidata"])
+            except Exception as e:
+                log(ui.detail(f"wikidata characters failed: {e}"), 2)
+        return list(dict.fromkeys(c for c in out if c))
+
     def _queries(self, ev):
         qs, seen = [], set()
         for t, src in ev["titles"]:

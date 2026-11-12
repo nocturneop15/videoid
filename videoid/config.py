@@ -28,6 +28,9 @@ DEFAULTS = {
         # a foreign NFO next to the movie is first only checked: end credits, one frame every N seconds;
         # it is accepted when the credits confirm the NFO's film with at least nfo_check_people names,
         # otherwise the normal full scan runs (scan --no-quick always does the full scan)
+        # text subtitles (in the file or next to it) are checked first: a candidate found by its title is
+        # accepted without OCR when this many of its characters are named in the dialogue (0 = off)
+        "subtitle_characters": 3,
         "nfo_check_every": 3,    # 0 = always full scan
         "nfo_check_people": 3,
         "extensions": ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "mpg", "mpeg", "ts",

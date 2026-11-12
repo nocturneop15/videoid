@@ -415,6 +415,8 @@ def main(argv=None):
                    help="rename identified movies (and their subtitles, NFO, artwork) to 'Title (Year)'")
     s.add_argument("--no-log", dest="log_file", action="store_false",
                    help="do not write <movie>.log next to each movie")
+    s.add_argument("--no-subs", dest="subs", action="store_false",
+                   help="don't try to identify films from their subtitles first")
     s.add_argument("--no-quick", dest="quick_nfo", action="store_false",
                    help="always do the full scan, even when an NFO names the film")
 

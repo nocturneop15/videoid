@@ -155,6 +155,16 @@ The log holds what was read and searched, the result, and any rename or Kodi fil
 as already identified only get an entry when something is renamed or written. To turn it off, use
 `--no-log` or `config scan.log_file false`.
 
+### Movies with text subtitles: no OCR needed
+
+Text subtitles inside the file (SRT / ASS / mov_text / WebVTT) or next to it are read first, in seconds.
+A candidate found by its title is accepted, as CERTAIN, without OCR when all of these hold:
+- at least `scan.subtitle_characters` (3) of its characters (from TMDB and Wikidata) are named in the dialogue, at least twice each;
+- its known length fits the file;
+- no other film with the same characters scores nearly as high.
+
+Picture subtitles (PGS, VobSub) are skipped. `--no-subs` turns this off.
+
 ### Movies with an NFO: quick check
 
 If a movie has an NFO that VideoID didn't write, it is checked first, not fully scanned. VideoID reads
