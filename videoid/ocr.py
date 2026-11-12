@@ -24,20 +24,48 @@ from .textutil import strip_accents
 # ---------------------------------------------------------------------------------------------
 GPU_LOCK = threading.Lock()
 
+# Recognition input "buckets": RapidOCR feeds the rec model (batch 1..6, 3, 48, W) with W = the widest crop
+# of the batch - nearly every batch on text-heavy credits is a shape never seen before. DirectML prepares
+# the model again for every new input shape; on an RTX 3070 credits took 1.6 s/frame vs 0.28 s on light
+# frames. Padding to a few fixed shapes (zeros = RapidOCR's own padding value) means each is prepared once.
+REC_WIDTH_STEP = 160
+
+
+def _pad_rec_input(x, batch, step):
+    b, c, h, w = x.shape
+    wb = max(w, -(-w // step) * step)
+    bb = max(b, batch)
+    if (bb, wb) == (b, w):
+        return x
+    out = np.zeros((bb, c, h, wb), dtype=x.dtype)
+    out[:b, :, :, :w] = x
+    return out
+
 
 def _install_session_lock():
-    """Make OrtInferSession honour a per-session lock (sessions without one run unlocked)."""
+    """Hook OrtInferSession: an optional per-session lock and optional rec input padding."""
     from rapidocr.inference_engine.onnxruntime.main import OrtInferSession
     if getattr(OrtInferSession, "_videoid_lockable", False):
         return
     OrtInferSession._videoid_run = OrtInferSession.__call__     # the real GPU call (tests wrap it)
 
     def __call__(self, x):
+        pad = getattr(self, "_videoid_rec_pad", None)
+        b = w = None
+        if pad is not None and getattr(x, "ndim", 0) == 4:
+            b, w = x.shape[0], x.shape[3]
+            x = _pad_rec_input(x, *pad)
         lock = getattr(self, "_videoid_lock", None)
         if lock is None:
-            return OrtInferSession._videoid_run(self, x)
-        with lock:
-            return OrtInferSession._videoid_run(self, x)
+            y = OrtInferSession._videoid_run(self, x)
+        else:
+            with lock:
+                y = OrtInferSession._videoid_run(self, x)
+        if b is not None and (x.shape[0], x.shape[3]) != (b, w):
+            # back to what RapidOCR expects: its batch, and time steps for its width (T scales with W)
+            t = int(round(y.shape[1] * w / x.shape[3]))
+            y = y[:b, :t]
+        return y
 
     OrtInferSession.__call__ = __call__
     OrtInferSession._videoid_lockable = True
@@ -171,6 +199,14 @@ class OCR:
             _install_session_lock()
             for s in self._sessions():
                 s._videoid_lock = GPU_LOCK
+        bmode = str(cfg.get("rec_buckets", "auto")).lower()
+        self.rec_buckets = bmode in ("true", "1", "yes") or (bmode == "auto" and "DirectML" in self.device)
+        if self.rec_buckets:
+            _install_session_lock()
+            for eng in self.engines:
+                rec = getattr(eng, "text_rec", None)
+                if rec is not None and getattr(rec, "session", None) is not None:
+                    rec.session._videoid_rec_pad = (int(getattr(rec, "rec_batch_num", 6) or 6), REC_WIDTH_STEP)
         self.min_conf = cfg.get("min_confidence", 0.6)
         self.device += f", languages: {', '.join(self.langs)}, detector: {base['Det.model_type']}"
         if "latin" not in self.langs and any(l in ("en", "ch") for l in self.langs):

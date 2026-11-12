@@ -277,6 +277,39 @@ def real_tests(video, workers_list, n_frames):
     left = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ffmpeg*"], capture_output=True, text=True).stdout
     check("ffmpeg" not in left.lower() and not ocr_threads(), "no ffmpeg process or threads left")
 
+    # recognition input sizes: DirectML prepares the model again for every new input shape
+    print("\n== text recognition input sizes (end credits, 1 worker, 2 passes each)")
+    from rapidocr.inference_engine.onnxruntime.main import OrtInferSession
+    from videoid.ocr import _install_session_lock
+    credits = [img.copy() for _, img in media.frames(video, max(0, info["duration"] - 24), 24, 1.0, info,
+                                                     cfg["scan"])]
+    texts = {}
+    for mode in (False, True):
+        o = OCR(dict(cfg["ocr"], rec_buckets=mode))
+        _install_session_lock()
+        rec, shapes = o.engines[0].text_rec.session, set()
+        orig = OrtInferSession._videoid_run
+
+        def spy(self, x, orig=orig, rec=rec, shapes=shapes):
+            if self is rec:
+                shapes.add(tuple(x.shape))
+            return orig(self, x)
+        OrtInferSession._videoid_run = spy
+        try:
+            times = []
+            for _ in range(2):
+                t = time.time()
+                texts[mode] = [[b["text"] for b in o.run(img)] for img in credits]
+                times.append((time.time() - t) / max(1, len(credits)))
+        finally:
+            OrtInferSession._videoid_run = orig
+        print(f"  rec_buckets={str(mode).lower():5}: pass 1 {times[0]:.3f} s/frame, pass 2 (sizes known) "
+              f"{times[1]:.3f} s/frame, {len(shapes)} distinct input sizes", flush=True)
+        del o
+    lines = sum(len(x) for x in texts[False])
+    same = sum(1 for a, b in zip(texts[False], texts[True]) if a == b)
+    print(f"  text identical in {same} of {len(credits)} frames ({lines} lines)")
+
     # decoding alone, same window as the end-to-end run
     print("\n== decoding only (same 24 s window, no OCR)")
     r = subprocess.run([media.ffmpeg_exe(), "-hide_banner", "-i", video], capture_output=True, text=True,
