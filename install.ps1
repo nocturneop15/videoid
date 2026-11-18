@@ -1,12 +1,12 @@
 # VideoID one-line installer:
 #   irm https://raw.githubusercontent.com/nocturneop15/videoid/main/install.ps1 | iex
-# Asks for the installation folder (Enter = %LOCALAPPDATA%\VideoID).
+# Asks for the installation folder (Enter = the current folder).
 # Unattended: set $env:VIDEOID_DIR = "D:\Tools\VideoID" before running and no question is asked.
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$Default = Join-Path $env:LOCALAPPDATA "VideoID"
+$Default = (Get-Location -PSProvider FileSystem).ProviderPath
 if ($env:VIDEOID_DIR) {
     $Dir = $env:VIDEOID_DIR
 } else {

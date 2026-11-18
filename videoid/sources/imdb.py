@@ -48,13 +48,14 @@ class IMDb:
         if self.pages_blocked:
             return None
         html = self.http.get(f"https://www.imdb.com/title/{tt}/", kind="text", browser=True,
-                             validate=lambda h: bool(h) and "ld+json" in h)
+                             validate=lambda h: bool(h) and "ld+json" in h, permanent=True)
         if not html:
             if not self.http.offline:
                 self.pages_blocked = True
                 log(ui.detail("(IMDb title pages are not accessible to scripts - using IMDb search and ids only)"), 1)
             return None
         f = Film(ids={"imdb": tt}, source="imdb")
+        f.full.add("imdb")
         soup = BeautifulSoup(html, "html.parser")
         for s in soup.find_all("script", type="application/ld+json"):
             try:
@@ -79,7 +80,8 @@ class IMDb:
         return f
 
     def _fullcredits(self, tt, f):
-        html = self.http.get(f"https://www.imdb.com/title/{tt}/fullcredits/", kind="text", browser=True)
+        html = self.http.get(f"https://www.imdb.com/title/{tt}/fullcredits/", kind="text", browser=True,
+                             permanent=lambda h: bool(h) and "/name/nm" in h)
         if not html:
             return
         # assign every /name/nm.. link to the nearest preceding section anchor (works for old and new layouts)

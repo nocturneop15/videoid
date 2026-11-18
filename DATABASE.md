@@ -4,14 +4,15 @@ VideoID keeps everything it learns in one SQLite file, `videoid.db`, next to the
 You can move it with `videoid config db_path <path>`.
 It runs in WAL mode, so it can be read with any SQLite client, even while a scan is running.
 
-Schema version: `PRAGMA user_version = 2`. Upgrades only add things (`ALTER TABLE ... ADD COLUMN`), so older databases keep working.
+Schema version: `PRAGMA user_version = 3`. Upgrades only add things (`ALTER TABLE ... ADD COLUMN`), so older databases keep working.
 
 ```
 files 1───* ocr_frames      raw OCR boxes per frame (re-parsable)
   │   1───* ocr_lines       unique OCR strings
   │   1───* people          people read from the credits
-  │   1───* matches ───*──1 films ──1───* film_ids
-  │                          (film_key)       (any external id -> film)
+  │   1───* matches ───*──1 films ──1───* film_ids     (any external id -> film)
+  │                          (film_key) ├──* film_titles  (normalized title -> film)
+  │                                     └──* film_people  (compact person name -> film)
 http_cache                  standalone: cached web / API responses
 ```
 
@@ -178,9 +179,19 @@ Verdict:
 | `key` | TEXT PK | URL plus sorted query string (API keys removed), or `csfd-api:<cmd>:<arg>` for the ČSFD bridge |
 | `status` | INTEGER | 200 (body stored) or 404 (negative result) |
 | `body` | BLOB | raw response (JSON / HTML) |
-| `fetched_at` | REAL | epoch; entries older than `cache_days` (default 30) are fetched again |
+| `fetched_at` | REAL | epoch; entries older than `cache_days` (default 30) are fetched again, unless `permanent` |
+| `permanent` | INTEGER | 1 = a full record (a film's details and credits on TMDB / ČSFD / IMDb / Wikidata, a person's filmography, an IMDb→TMDB id link), kept forever and never fetched again. Searches stay temporary. `videoid kodi --refresh` re-fetches them anyway |
 
-Bot-check / challenge pages are never cached. `videoid scan --offline` answers only from this table.
+Bot-check / challenge pages are never cached. `videoid scan --offline` answers only from this table (expired entries included).
+
+## Local-first identification
+
+Every film whose full record was fetched is stored in `films` for good, and indexed in `film_titles` and
+`film_people`; a record already stored is merged with the new one, never replaced by a poorer one.
+Each scan first identifies the film from these stored records only, with no network at all. When that gives
+a CERTAIN match without warnings, the scan goes on with it (its evidence carries `"local": true`). Otherwise
+the online databases are asked as before, and everything they return is stored for the next time.
+`scan --online` (or `videoid config scan.local_first false`) always asks them.
 
 ---
 

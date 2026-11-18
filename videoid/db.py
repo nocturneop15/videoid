@@ -40,7 +40,13 @@ CREATE TABLE IF NOT EXISTS matches(
     evidence_json TEXT, PRIMARY KEY(file_id, rank)
 );
 CREATE TABLE IF NOT EXISTS http_cache(
-    key TEXT PRIMARY KEY, status INTEGER, body BLOB, fetched_at REAL
+    key TEXT PRIMARY KEY, status INTEGER, body BLOB, fetched_at REAL, permanent INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS film_titles(
+    title TEXT, film_key TEXT, PRIMARY KEY(title, film_key)
+);
+CREATE TABLE IF NOT EXISTS film_people(
+    name TEXT, film_key TEXT, PRIMARY KEY(name, film_key)
 );
 """
 
@@ -63,17 +69,27 @@ class DB:
         cols = {r["name"] for r in self.con.execute("PRAGMA table_info(ocr_frames)")}
         if "n" not in cols:
             self.con.execute("ALTER TABLE ocr_frames ADD COLUMN n INTEGER DEFAULT 1")
-        self.con.execute("PRAGMA user_version = 2")
+        cols = {r["name"] for r in self.con.execute("PRAGMA table_info(http_cache)")}
+        if "permanent" not in cols:
+            self.con.execute("ALTER TABLE http_cache ADD COLUMN permanent INTEGER DEFAULT 0")
+        if self.con.execute("PRAGMA user_version").fetchone()[0] < 3:
+            self._reindex_films()              # local lookup tables for the films stored so far
+        self.con.execute("PRAGMA user_version = 3")
 
     # ---------- http cache ----------
-    def cache_get(self, key, max_age):
-        r = self.con.execute("SELECT status, body, fetched_at FROM http_cache WHERE key=?", (key,)).fetchone()
-        if r and time.time() - r["fetched_at"] < max_age:
-            return r["status"], r["body"]
-        return None
+    def cache_get(self, key):
+        """(status, body, fetched_at, permanent) or None - the caller decides whether it is still fresh."""
+        r = self.con.execute("SELECT status, body, fetched_at, permanent FROM http_cache WHERE key=?",
+                             (key,)).fetchone()
+        return (r["status"], r["body"], r["fetched_at"], bool(r["permanent"])) if r else None
 
-    def cache_put(self, key, status, body):
-        self.con.execute("INSERT OR REPLACE INTO http_cache VALUES(?,?,?,?)", (key, status, body, time.time()))
+    def cache_put(self, key, status, body, permanent=False):
+        self.con.execute("INSERT OR REPLACE INTO http_cache(key, status, body, fetched_at, permanent) "
+                         "VALUES(?,?,?,?,?)", (key, status, body, time.time(), int(bool(permanent))))
+        self.con.commit()
+
+    def cache_keep(self, key):
+        self.con.execute("UPDATE http_cache SET permanent=1 WHERE key=?", (key,))
         self.con.commit()
 
     # ---------- files ----------
@@ -164,18 +180,90 @@ class DB:
 
     # ---------- films ----------
     def save_film(self, film):
-        key = film.key()
+        """Store a film for good. A record already stored under any of its ids is merged in, never replaced by
+        a poorer one (a later search hit must not wipe the full cast and crew fetched earlier). The newest
+        descriptive details (plot, artwork, ...) win. Returns the film's key."""
+        from .film import Film
+        merged = Film.from_dict(film.to_dict())
+        olds = {}
+        for src, ext in film.ids.items():
+            r = self.con.execute("SELECT film_key FROM film_ids WHERE source=? AND ext_id=?",
+                                 (src, str(ext))).fetchone()
+            if r:
+                olds.setdefault(r["film_key"], None)
+        olds.setdefault(film.key(), None)
+        for k in list(olds):
+            d = self.film_json(k)
+            if not d:
+                continue
+            old = Film.from_dict(d)
+            if any(i in merged.ids and old.ids[i] != merged.ids[i] for i in old.ids):
+                continue                    # conflicting ids - a different film, leave it alone
+            merged.merge(old)
+            olds[k] = True
+        for src, d in film.details.items():
+            merged.details[src] = dict(d)
+        key = merged.key()
+        for k, found in olds.items():
+            if found and k != key:          # the film got a better id (e.g. IMDb): its old key follows
+                for t in ("films", "film_ids", "film_titles", "film_people"):
+                    col = "key" if t == "films" else "film_key"
+                    self.con.execute(f"DELETE FROM {t} WHERE {col}=?", (k,))
+                self.con.execute("UPDATE matches SET film_key=? WHERE film_key=?", (key, k))
+                self.con.execute("UPDATE files SET film_key=? WHERE film_key=?", (key, k))
+        self._store_film(key, merged)
+        self.con.commit()
+        return key
+
+    def _store_film(self, key, film):
+        from .textutil import compact, norm
         self.con.execute("INSERT OR REPLACE INTO films VALUES(?,?,?,?,?,?,?)", (
             key, json.dumps(film.ids), film.title, film.year, film.runtime,
             json.dumps(film.to_dict(), ensure_ascii=False), now()))
         for src, ext in film.ids.items():
             self.con.execute("INSERT OR REPLACE INTO film_ids VALUES(?,?,?)", (src, str(ext), key))
-        self.con.commit()
-        return key
+        self.con.execute("DELETE FROM film_titles WHERE film_key=?", (key,))
+        self.con.executemany("INSERT OR IGNORE INTO film_titles VALUES(?,?)",
+                             [(norm(t), key) for t in film.titles if norm(t)])
+        self.con.execute("DELETE FROM film_people WHERE film_key=?", (key,))
+        names = {compact(n) for n in film.credits_names()} - {""}
+        self.con.executemany("INSERT OR IGNORE INTO film_people VALUES(?,?)", [(n, key) for n in names])
+
+    def _reindex_films(self):
+        from .film import Film
+        for r in self.con.execute("SELECT key, json FROM films").fetchall():
+            try:
+                self._store_film(r["key"], Film.from_dict(json.loads(r["json"])))
+            except (ValueError, TypeError):
+                pass
 
     def film_json(self, key):
         r = self.con.execute("SELECT json FROM films WHERE key=?", (key,)).fetchone()
         return json.loads(r["json"]) if r else None
+
+    # ---------- local film lookup (before asking the online databases) ----------
+    def film_keys_by_ids(self, ids):
+        out = []
+        for src, ext in (ids or {}).items():
+            r = self.con.execute("SELECT film_key FROM film_ids WHERE source=? AND ext_id=?",
+                                 (src, str(ext))).fetchone()
+            if r:
+                out.append(r["film_key"])
+        return out
+
+    def film_titles(self):
+        """[(normalized title, film key)] of every stored film."""
+        return [(r["title"], r["film_key"]) for r in self.con.execute("SELECT title, film_key FROM film_titles")]
+
+    def film_keys_by_people(self, names, min_hits=2):
+        """Stored films that at least min_hits of these (compact) names worked on: [(key, hits)]."""
+        names = list(dict.fromkeys(n for n in names if n))
+        if not names:
+            return []
+        q = ",".join("?" * len(names))
+        return [(r["film_key"], r["n"]) for r in self.con.execute(
+            f"SELECT film_key, COUNT(DISTINCT name) AS n FROM film_people WHERE name IN ({q}) "
+            f"GROUP BY film_key HAVING n >= ? ORDER BY n DESC LIMIT 40", (*names, min_hits))]
 
     def save_matches(self, fid, ranked):
         self.con.execute("DELETE FROM matches WHERE file_id=?", (fid,))
@@ -193,7 +281,7 @@ class DB:
             for m in ms:
                 m["evidence"] = json.loads(m["evidence_json"])
             if ms:
-                ms[0]["evidence"]["rejected_by_user"] = True        # don't ask again on the next run
+                ms[0]["evidence"]["rejected_by_user"] = True        # the next interactive run says so
                 self.save_matches(fid, ms)
             self.file_upsert_id(fid, film_key=None, title=None, year=None, verdict="UNKNOWN", confidence=0,
                                 ids_json="{}")
@@ -201,6 +289,7 @@ class DB:
         pick = ms.pop(rank)
         ev = json.loads(pick["evidence_json"])
         ev["chosen_by_user"] = True
+        ev.pop("rejected_by_user", None)
         ev["warnings"] = []
         pick.update(verdict="CERTAIN", confidence=1.0, evidence=ev)
         for m in ms:

@@ -29,9 +29,11 @@ class Wikidata:
         # the preferred scraping language comes first, so its labels become the titles
         self.langs = list(dict.fromkeys([*(first or ["en"]), "en", "mul", "cs", "sk", "de", "fr", *extra_langs]))
 
-    def sparql(self, q):
+    def sparql(self, q, permanent=False):
+        """permanent: the query reads full records - an answer with rows is kept forever."""
+        keep = (lambda v: bool((v or {}).get("results", {}).get("bindings"))) if permanent else False
         r = self.http.get(SPARQL, params={"query": q, "format": "json"},
-                          headers={"Accept": "application/sparql-results+json"})
+                          headers={"Accept": "application/sparql-results+json"}, permanent=keep)
         return (r or {}).get("results", {}).get("bindings", [])
 
     def characters(self, qid):
@@ -39,7 +41,7 @@ class Wikidata:
         langs = ", ".join(_lit(l) for l in self.langs)
         rows = self.sparql(f"""SELECT DISTINCT ?l WHERE {{
               {{ wd:{qid} wdt:P674 ?c }} UNION {{ wd:{qid} p:P161 ?st . ?st pq:P453 ?c }}
-              ?c rdfs:label ?l . FILTER(LANG(?l) IN ({langs})) }}""")
+              ?c rdfs:label ?l . FILTER(LANG(?l) IN ({langs})) }}""", permanent=True)
         return sorted({r["l"]["value"] for r in rows})
 
     def _search(self, query, limit):
@@ -116,11 +118,13 @@ class Wikidata:
               OPTIONAL {{ ?film wdt:P2529 ?csfd }} OPTIONAL {{ ?film wdt:P577 ?date }}
               OPTIONAL {{ ?film wdt:P2047 ?dur }} OPTIONAL {{ ?film wdt:P1476 ?title }}
               OPTIONAL {{ ?film rdfs:label ?lbl FILTER(LANG(?lbl) IN ({", ".join(_lit(l) for l in self.langs)})) }}
-            }}""")
+            }}""", permanent=True)
         years = defaultdict(list)
         for r in rows:
             q = r["film"]["value"].rsplit("/", 1)[-1]
             f = films[q]
+            if "imdb" in r or "lbl" in r or "title" in r:      # the item exists (VALUES rows always come back)
+                f.full.add("wikidata")
             for k in ("imdb", "tmdb", "csfd"):
                 if k in r:
                     f.ids.setdefault(k, r[k]["value"])
@@ -146,7 +150,7 @@ class Wikidata:
               VALUES ?film {{ {vals} }} VALUES ?prop {{ {props} }}
               ?film ?prop ?person .
               ?person rdfs:label ?lbl FILTER(LANG(?lbl) IN ({langs}))
-            }}""")
+            }}""", permanent=True)
         # one row per label language: first label (by our language order) is canonical, others are aliases
         rank = {l: i for i, l in enumerate(self.langs)}
         people = {}

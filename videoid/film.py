@@ -26,6 +26,7 @@ class Film:
         self.sources = {source} if source else set()
         self.hits = 0            # how many reverse-lookup people pointed to this film
         self.aliases = {}        # canonical name -> other spellings/scripts ("Zhang Yimou" -> ["张艺谋"])
+        self.full = set()        # sources whose FULL record (all credits) is in here, not just a search hit
         # descriptive metadata per source, used for Kodi NFOs:
         # {"tmdb": {"title", "originaltitle", "plot", "tagline", "genres", "countries", "studios", "tags",
         #           "premiered", "rating": {"value", "max", "votes"}, "poster", "fanart",
@@ -89,6 +90,7 @@ class Film:
             for n in names:
                 self.add_person(n, role)
         self.sources |= o.sources
+        self.full |= o.full
         self.hits = max(self.hits, o.hits)
         for n, al in o.aliases.items():
             for a in al:
@@ -99,6 +101,18 @@ class Film:
 
     def n_people(self):
         return sum(len(v) for v in self.credits.values())
+
+    def credits_names(self):
+        """Every person's name and alias spellings."""
+        for names in self.credits.values():
+            for n in names:
+                yield n
+                yield from self.aliases.get(n, [])
+
+    def is_complete(self):
+        """A full record was fetched from at least one database (records stored by older versions don't say:
+        a long credits list stands in for that)."""
+        return bool(self.full) or self.n_people() >= 10
 
     def people_index(self):
         """[(compact, norm, name, role, order)] - used for fuzzy matching. Aliases point to the canonical name."""
@@ -116,13 +130,14 @@ class Film:
     def to_dict(self):
         return {"ids": self.ids, "title": self.title, "titles": self.titles, "year": self.year,
                 "runtime": self.runtime, "credits": self.credits, "aliases": self.aliases,
-                "sources": sorted(self.sources), "details": self.details}
+                "sources": sorted(self.sources), "full": sorted(self.full), "details": self.details}
 
     @classmethod
     def from_dict(cls, d):
         f = cls(ids=d.get("ids"), title=d.get("title"), titles=d.get("titles"), year=d.get("year"),
                 runtime=d.get("runtime"), credits=d.get("credits"))
         f.sources = set(d.get("sources") or [])
+        f.full = set(d.get("full") or [])
         f.aliases = d.get("aliases") or {}
         f.details = d.get("details") or {}
         return f

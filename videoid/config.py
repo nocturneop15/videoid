@@ -39,6 +39,9 @@ DEFAULTS = {
         "subtitle_characters": 3,
         "nfo_check_every": 3,    # 0 = always full scan
         "nfo_check_people": 3,
+        # films are identified from the local database (full records kept from earlier scans) first; the online
+        # databases are asked only when no CERTAIN match is found there (scan --online always asks them)
+        "local_first": True,
         "extensions": ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "mpg", "mpeg", "ts",
                        "m2ts", "mts", "vob", "webm", "flv", "ogm", "divx", "3gp", "rmvb"],
     },
@@ -60,7 +63,9 @@ DEFAULTS = {
     #   min_verdict: write only for matches this sure and better - CERTAIN (default; includes films chosen with
     #   scan --interactive) / PROBABLE / POSSIBLE
     #   prefer: which database's plot, genres, title and artwork to use first (e.g. ["csfd", "tmdb"] for Czech)
-    "kodi": {"min_verdict": "CERTAIN", "artwork": True, "prefer": ["tmdb", "csfd"]},
+    # complete_nfo: an existing Kodi NFO (<video>.nfo / movie.nfo) not written by VideoID that names the identified
+    #   film is kept, and only the fields it lacks are added from the databases (original kept as .nfo.bak)
+    "kodi": {"min_verdict": "CERTAIN", "artwork": True, "prefer": ["tmdb", "csfd"], "complete_nfo": True},
     # scan --rename: the movie and its same-named subtitles / NFO / artwork / log get the pattern's name;
     #   {title} is the title Kodi gets (kodi.prefer order - put csfd first for Czech titles), also
     #   {originaltitle} and {year}; only matches at least min_verdict sure are renamed

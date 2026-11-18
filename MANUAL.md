@@ -37,8 +37,9 @@ Open **PowerShell**: press Start, type `powershell`, press Enter. Paste this lin
 irm https://raw.githubusercontent.com/nocturneop15/videoid/main/install.ps1 | iex
 ```
 
-1. It asks where to install. Press **Enter** for the default (`%LOCALAPPDATA%\VideoID`) or type a folder,
-   e.g. `D:\Tools\VideoID`.
+1. It asks where to install. Press **Enter** for the default, the folder PowerShell is in (so `cd` to an
+   empty folder first, e.g. `mkdir D:\Tools\VideoID; cd D:\Tools\VideoID`), or type a folder, e.g.
+   `D:\Tools\VideoID`. If the folder isn't empty, it asks before installing into it.
 2. It downloads VideoID and everything it needs, including Python, ffmpeg and the OCR models. This takes
    a few minutes. Nothing is installed system-wide; everything stays in that folder.
 3. It adds `videoid` to your PATH. **Close and reopen PowerShell** afterwards so the command is found.
@@ -230,7 +231,8 @@ it asks whether it's that film):
 
 - **A number:** that film becomes the result, as CERTAIN, so `--kodi` and `--rename` use it.
   The result then says *chosen by you*.
-- **`0`:** none of them is right. The file is marked UNKNOWN and you won't be asked about it again.
+- **`0`:** none of them is right. The file is marked UNKNOWN. The next `--interactive` run asks about it again
+  (saying you rejected these candidates last time), so you can type its name once you know it.
 - **The film's name:** if the right film isn't in the list, type its name, for example `Pelíšky 1999`
   (the year is optional). VideoID searches all the databases again for that name and compares the results with
   the names it read in the credits, then shows the new list, so you choose with a number as before. If a year
@@ -290,9 +292,18 @@ Options for `videoid kodi`:
 | `--no-artwork` | NFO only, no poster or fanart |
 | `--overwrite` | replace an NFO that VideoID didn't write (the old one is kept as `.nfo.bak`) |
 | `--refresh` | fetch plot, genres and artwork again |
-| `--dry-run` | print the NFO, write nothing |
+| `--dry-run` | print the NFO, write nothing next to the videos. What it fetches from the online databases (missing ids, plot, artwork links, ...) is still stored in the database, so the real run needs no network for it |
 
-NFO files that VideoID didn't write are never touched without `--overwrite`.
+An NFO that VideoID didn't write (`<video>.nfo` or `movie.nfo`) is never replaced without `--overwrite`.
+When it names the film VideoID identified (same IMDb / TMDB / ČSFD id, or the same title and year) **and** it
+fits the video itself, it is **completed** instead. "Fits the video" is checked against what was read from the
+file: its real length (the NFO's runtime may differ by up to 15 minutes), the names read in its credits (at least
+one of the NFO's people must be among them), the character names heard in its subtitles, and the quick NFO
+check of the scan. At least one of these must agree and none may contradict it; the status line says which did.
+Completed means: everything in it stays as it is, and only what it lacks is added from the databases
+(plot, ratings, runtime, poster, genres, directors, missing ids, actors and their roles, ...). The original is
+kept once as `.nfo.bak`, and the status line lists what was added. An NFO naming a different film, or a
+free-text scene NFO, is left alone. `videoid config kodi.complete_nfo false` turns completing off.
 
 ---
 

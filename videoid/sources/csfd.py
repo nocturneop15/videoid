@@ -83,12 +83,15 @@ class CSFD:
             log("  CSFD disabled: portable Node / node-csfd-api missing (run setup.cmd)", 1)
 
     # ------------------------------------------------------------ transport
+    # a film's / a person's full record is kept forever; searches expire after cache_days
+    PERMANENT = {"movie", "creator"}
+
     def _call(self, cmd, arg):
         key = f"csfd-api:{cmd}:{arg}"
-        hit = self.db.cache_get(key, self.http.max_age)
-        if hit:
-            status, body = hit
-            return json.loads(body) if status == 200 else None
+        keep = (lambda v: bool(v)) if cmd in self.PERMANENT else False
+        hit = None if self.http.bypass and not self.http.offline else self.http.cached(key, "json", None, keep)
+        if hit is not None:
+            return hit[0]
         if self.blocked or self.http.offline:
             return None
         if self._bridge is None:
@@ -109,7 +112,8 @@ class CSFD:
             self._bridge = None
             return None
         if r.get("ok"):
-            self.db.cache_put(key, 200, json.dumps(r["data"], ensure_ascii=False).encode("utf-8"))
+            self.db.cache_put(key, 200, json.dumps(r["data"], ensure_ascii=False).encode("utf-8"),
+                              permanent=self.http._is_permanent(keep, r["data"]))
             return r["data"]
         reason = r.get("reason")
         log(f"  CSFD {cmd} {arg}: {reason or r.get('error')}", 2)
@@ -138,6 +142,7 @@ class CSFD:
             return None
         f = Film(ids={"csfd": m.get("id") or csfd_id}, title=m.get("title"), year=m.get("year") or None,
                  source="csfd")
+        f.full.add("csfd")
         for t in m.get("titlesOther") or []:
             f.add_title(t.get("title"))
         d = m.get("duration")

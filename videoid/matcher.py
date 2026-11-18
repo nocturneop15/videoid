@@ -37,10 +37,17 @@ class Matcher:
         self.tmdb = tm if (s.get("tmdb", True) and tm.enabled) else None
         self.imdb = IMDb(http) if s.get("imdb", True) else None
         self.csfd = CSFD(http) if s.get("csfd", True) else None
+        self.http = http
+        # identify from the films already stored in the local database first; online only when that is not CERTAIN
+        self.local_first = cfg.get("scan", {}).get("local_first", True)
 
     # ------------------------------------------------------------------ public
     def identify(self, ev):
         """ev: dict(titles=[(t,src)], years=[(y,src)], ids={}, people=[{name,role,..}], runtime=min)"""
+        if self.local_first:
+            ranked = self._identify_local(ev)
+            if ranked:
+                return ranked
         cands = self._candidates(ev)
         if not cands:
             log(ui.warn("no candidate films found in any database"), 1)
@@ -57,6 +64,50 @@ class Matcher:
             self._verdicts(ranked, ev)
         for r in ranked:
             r["film_key"] = self.db.save_film(r["film"])
+        # every other film whose full record was fetched is kept too - a later file may be that film
+        shown = {id(r["film"]) for r in ranked}
+        kept = [f for f in cands if id(f) not in shown and f.is_complete()]
+        for f in kept:
+            self.db.save_film(f)
+        log(ui.detail(f"stored {len(ranked) + len(kept)} films in the local database for future scans"), 2)
+        return ranked
+
+    # ---------------------------------------------------------- local database
+    def _identify_local(self, ev):
+        """Identify from the films stored by earlier scans (full records only), with no network at all.
+        Returns the ranked matches when the best one is CERTAIN without warnings, else None (-> online)."""
+        keys = dict.fromkeys(self.db.film_keys_by_ids(ev.get("ids")))
+        index = None
+        for t, _ in self._queries(ev):
+            if index is None:
+                index = self.db.film_titles()
+                if not index:
+                    return None                          # empty database - nothing to look in
+            for _, _, i in process.extract(norm(t), [x[0] for x in index], scorer=fuzz.ratio,
+                                           score_cutoff=85, limit=15):
+                keys.setdefault(index[i][1])
+        for k, _ in self.db.film_keys_by_people([compact(p["name"]) for p in ev["people"]]):
+            keys.setdefault(k)
+        films = {}
+        for k in keys:
+            d = self.db.film_json(k)
+            if d and (f := Film.from_dict(d)).is_complete():
+                films[k] = f
+        if not films:
+            return None
+        log(ui.step(f"Looking in the local database first: {len(films)} stored film(s) could fit"), 1)
+        ranked = self._rank(list(films.values()), ev)
+        self._verdicts(ranked, ev)
+        top = ranked[0]
+        name = f"{top['film'].title} ({top['film'].year or '?'})"
+        if top["verdict"] != "CERTAIN" or top["evidence"].get("warnings"):
+            log(ui.detail(f"best local match {name} is {top['verdict']} - asking the online databases"), 1)
+            return None
+        key_of = {id(f): k for k, f in films.items()}
+        for r in ranked:
+            r["film_key"] = key_of[id(r["film"])]
+            r["evidence"]["local"] = True
+        log(ui.good(f"Found in the local database: {name} - CERTAIN, no online lookup needed"), 1)
         return ranked
 
     # ---------------------------------------------------------- candidates

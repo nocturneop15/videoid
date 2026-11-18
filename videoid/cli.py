@@ -66,6 +66,8 @@ def cmd_scan(cfg, args):
         sc["fps_open"] = sc["fps_end"] = args.fps
     if args.cpu:
         cfg["ocr"]["gpu"] = False
+    if args.online:
+        sc["local_first"] = False
     if args.lang:
         from .ocr import resolve_languages
         cfg["ocr"]["languages"] = [l.strip() for l in args.lang.split(",") if l.strip()]
@@ -142,22 +144,26 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
 
 def _ask_match(ctx, fid, limit=6):
     """scan --interactive: when the result is not CERTAIN, let the user pick the film (or confirm the only one),
-    or type the film's name / IMDb id / database link to search again. Returns True when the stored result changed."""
+    or type the film's name / IMDb id / database link to search again. Every film that is not CERTAIN is asked
+    about on every interactive run - also those answered "none of these" before (Enter leaves it as it is).
+    Returns True when the stored result changed."""
     if not sys.stdin or not sys.stdin.isatty():
         return False
     db = ctx.db
-    ms = db.matches(fid)
-    if ms and ms[0]["verdict"] == "CERTAIN":
-        return False
-    if ms and json.loads(ms[0]["evidence_json"]).get("rejected_by_user"):
-        return False
     row = db.file_get(fid)
+    ms = db.matches(fid)
+    if ms and ms[0]["verdict"] == "CERTAIN" and row["verdict"] == "CERTAIN":
+        return False
     file_min = f", file {row['duration'] / 60:.0f} min" if row["duration"] else ""
     changed = False
     while True:
         ms = db.matches(fid)[:limit]
+        rejected = bool(ms) and json.loads(ms[0]["evidence_json"]).get("rejected_by_user")
         if not ms:
             logmod.out(ui.question(f"Not identified{file_min}. Do you know which film it is?"))
+        elif rejected:
+            logmod.out(ui.question(f"Not identified{file_min} - you said none of these is it last time. "
+                                   "Is it one of them after all, or do you know which film it is?"))
         else:
             logmod.out(ui.question(f"Not sure{file_min}. " + ("Which film is it?" if len(ms) > 1 else "Is it this film?")))
             _show_options(db, ms)
@@ -473,6 +479,8 @@ def main(argv=None):
     s.add_argument("--no-recursive", action="store_true")
     s.add_argument("--all-sizes", action="store_true", help="include samples and small files")
     s.add_argument("--offline", action="store_true", help="use only cached web responses")
+    s.add_argument("--online", action="store_true",
+                   help="always ask the online databases, even when the local database has a CERTAIN match")
     s.add_argument("--top", type=int, default=3, help="candidates to print")
     s.add_argument("--json", help="also write results to this JSON file")
     s.add_argument("--kodi", action="store_true", help="also write Kodi .nfo + poster/fanart for identified files")

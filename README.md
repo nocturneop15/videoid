@@ -104,7 +104,7 @@ One line in PowerShell:
 ```powershell
 irm https://raw.githubusercontent.com/nocturneop15/videoid/main/install.ps1 | iex
 ```
-It asks for the installation folder (Enter = `%LOCALAPPDATA%\VideoID`; for an unattended install set `$env:VIDEOID_DIR` first),
+It asks for the installation folder (Enter = the current folder; for an unattended install set `$env:VIDEOID_DIR` first),
 downloads the code, builds the runtime and adds `videoid` to your user PATH. Running it again updates the code and keeps your database and config.
 
 Or clone / download the repository and just run `videoid.cmd`. On first start it downloads everything it needs into `.\runtime`:
@@ -200,7 +200,7 @@ is left as it is. The old name is recorded in the movie's log.
 ```
 videoid.cmd kodi D:\Movies                 # every identified file below the folder (alias: videoid nfo)
 videoid.cmd scan D:\Movies --kodi          # identify and write in one go
-videoid.cmd kodi film.mkv --dry-run        # print the NFO only
+videoid.cmd kodi film.mkv --dry-run        # print the NFO only (fetched data is still stored in the database)
 ```
 
 For every file matched `CERTAIN` (including films chosen with `scan --interactive`), this writes next to the video:
@@ -220,7 +220,7 @@ Kodi picks these up with "Local information only", or with any scraper (which us
 | `--overwrite` | off | replace a `<video>.nfo` or artwork that VideoID didn't write. The old NFO is kept as `.nfo.bak`. |
 | `--refresh` | off | fetch plot, genres and artwork again from TMDB / ČSFD |
 
-- **Your files are safe:** NFOs that VideoID didn't write are never touched without `--overwrite`.
+- **Your files are safe:** NFOs that VideoID didn't write are never replaced without `--overwrite`. One that names the identified film is only completed: its own fields stay, missing ones are added from the databases, and the original is kept as `.nfo.bak` (`kodi.complete_nfo false` turns this off).
 - **No self-confirmation:** the NFOs VideoID writes carry a `created by VideoID` comment, and `scan` ignores them as evidence, so a written NFO can't confirm its own match.
 - **What's skipped:** TV episodes.
 - **Language:** without a TMDB key, the descriptive metadata comes from ČSFD and is in Czech.

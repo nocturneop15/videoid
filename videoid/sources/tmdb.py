@@ -28,13 +28,13 @@ class TMDB:
         self.tag = language + ":" + ",".join(self.prefer)      # stored with details: re-fetch when it changes
         self.enabled = bool(self.key)
 
-    def _get(self, path, **params):
+    def _get(self, path, permanent=False, **params):
         headers = None
         if len(self.key) > 40:          # v4 read access token (JWT)
             headers = {"Authorization": f"Bearer {self.key}"}
         else:
             params["api_key"] = self.key
-        return self.http.get(BASE + path, params=params, headers=headers)
+        return self.http.get(BASE + path, params=params, headers=headers, permanent=permanent)
 
     @staticmethod
     def _year(d):
@@ -59,21 +59,24 @@ class TMDB:
         return out
 
     def find_imdb(self, tt):
-        r = self._get(f"/find/{tt}", external_source="imdb_id") or {}
+        r = self._get(f"/find/{tt}", external_source="imdb_id",
+                      permanent=lambda v: bool((v or {}).get("movie_results"))) or {}
         res = r.get("movie_results") or []
         return res[0]["id"] if res else None
 
     def fetch(self, tmdb_id):
         m = self._get(f"/movie/{tmdb_id}", language=self.lang,
                       append_to_response="credits,external_ids,alternative_titles,images,translations",
-                      include_image_language=",".join(self.prefer + ["null"]))
-        if not m:
+                      include_image_language=",".join(self.prefer + ["null"]),
+                      permanent=lambda v: bool((v or {}).get("id")))
+        if not m or not m.get("id"):
             return None
         ext = m.get("external_ids") or {}
         f = Film(ids={"tmdb": m["id"], "imdb": ext.get("imdb_id") or m.get("imdb_id"),
                       "wikidata": ext.get("wikidata_id")},
                  title=m.get("title"), titles=[m.get("original_title")],
                  year=self._year(m.get("release_date")), runtime=m.get("runtime") or None, source="tmdb")
+        f.full.add("tmdb")
         for t in (m.get("alternative_titles") or {}).get("titles", []):
             f.add_title(t.get("title"))
         cr = m.get("credits") or {}
@@ -128,7 +131,8 @@ class TMDB:
             r = self._get("/search/person", query=n, include_adult="true") or {}
             seen = set()
             for p in r.get("results", [])[:2]:
-                cr = self._get(f"/person/{p['id']}/movie_credits") or {}
+                cr = self._get(f"/person/{p['id']}/movie_credits",
+                               permanent=lambda v: bool((v or {}).get("cast") or (v or {}).get("crew"))) or {}
                 for c in cr.get("cast", []) + cr.get("crew", []):
                     seen.add(c["id"])
             counts.update(seen)
