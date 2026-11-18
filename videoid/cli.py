@@ -77,7 +77,10 @@ def cmd_scan(cfg, args):
                     "('videoid keys' adds one)"), 1)
     ctx = _ctx(cfg, args, need_ocr=args.ocr)
     results, errors = [], 0
-    write_logs = args.log_file and sc.get("log_file", True)
+    write_logs = args.log_file and sc.get("log_file", True) and not args.dry_run
+    if args.dry_run:
+        log(ui.detail("dry run: nothing is written, renamed or logged next to the videos; everything identified "
+                      "and fetched is still stored in the database"), 0)
     files = list(iter_videos(args.paths, cfg, recursive=not args.no_recursive))
     if len(files) > 1:
         log(ui.c(f"{len(files)} video files to check", ui.BOLD), 0)
@@ -131,12 +134,14 @@ def _scan_one(ctx, cfg, path, args, describe, process_file):
         changed = True
     if args.rename:
         from .filing import rename_movie
-        new, status = rename_movie(ctx.db, fid, ctx.matcher, cfg["rename"], cfg["kodi"].get("prefer"))
+        new, status = rename_movie(ctx.db, fid, ctx.matcher, cfg["rename"], cfg["kodi"].get("prefer"),
+                                   dry_run=args.dry_run)
         logmod.out(ui.status("rename", status))
         changed = changed or new is not None
     if args.kodi:
         from .kodi import write_for_file
-        status = write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"], overwrite=args.overwrite_nfo)
+        status = write_for_file(ctx.db, fid, ctx.matcher, cfg["kodi"], overwrite=args.overwrite_nfo,
+                                dry_run=args.dry_run, show=False)
         logmod.out(ui.status("kodi", status))
         changed = changed or status.startswith("wrote")
     return fid, changed
@@ -491,6 +496,9 @@ def main(argv=None):
                    help="when a film is not CERTAIN, ask which film it is (only CERTAIN films get Kodi files)")
     s.add_argument("--rename", action="store_true",
                    help="rename identified movies (and their subtitles, NFO, artwork) to 'Title (Year)'")
+    s.add_argument("--dry-run", action="store_true",
+                   help="identify and store everything in the database, but write, rename and log nothing next to "
+                        "the videos (with --kodi / --rename: shows what would be done)")
     s.add_argument("--no-log", dest="log_file", action="store_false",
                    help="do not write <movie>.log next to each movie")
     s.add_argument("--no-subs", dest="subs", action="store_false",

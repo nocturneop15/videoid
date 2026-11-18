@@ -328,7 +328,7 @@ def complete_nfo(root, fresh):
     return added
 
 
-def _complete_file(path, film, xml, dry_run):
+def _complete_file(path, film, xml, dry_run, show=True):
     """Fill in the foreign Kodi NFO at `path` from the freshly built `xml`. Returns (changed, status), or None
     when the NFO is not a Kodi <movie> NFO (free text: it can't be completed)."""
     from .localinfo import _decode
@@ -359,7 +359,8 @@ def _complete_file(path, film, xml, dry_run):
     out = ('<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>\n' + head.lstrip("\r\n")
            + ET.tostring(root, encoding="unicode") + tail)
     if dry_run:
-        print(out)
+        if show:
+            print(out)
         return True, f"missing fields into {path.name} ({what})"
     bak = path.with_name(path.name + ".bak")
     if not bak.exists():                                     # the original as it was, kept once
@@ -385,8 +386,9 @@ def _download(url, target):
         return False
 
 
-def write_for_file(db, fid, matcher, kcfg, overwrite=False, dry_run=False, refresh=False):
-    """Write NFO (+ artwork) next to one analysed file. Returns a short status string."""
+def write_for_file(db, fid, matcher, kcfg, overwrite=False, dry_run=False, refresh=False, show=True):
+    """Write NFO (+ artwork) next to one analysed file. Returns a short status string.
+    dry_run: write nothing (show=True prints the NFO that would be written)."""
     row = db.file_get(fid)
     video = Path(row["path"])
     min_rank = VERDICT_RANK.get(str(kcfg.get("min_verdict", "CERTAIN")).upper(), 3)
@@ -422,7 +424,7 @@ def write_for_file(db, fid, matcher, kcfg, overwrite=False, dry_run=False, refre
                     support, contra = verify_against_video(n, nfo, db, fid)
                     fits = bool(support) and not contra
                     if fits:
-                        res = _complete_file(n, film, xml, dry_run)
+                        res = _complete_file(n, film, xml, dry_run, show)
                         if res:
                             res = (res[0], res[1] + "; verified against the video: " + ", ".join(support))
                     else:
@@ -454,7 +456,8 @@ def write_for_file(db, fid, matcher, kcfg, overwrite=False, dry_run=False, refre
         done.append("; ".join(changed + kept + notes))
     else:
         if dry_run:
-            print(xml)
+            if show:
+                print(xml)
             return f"would write {target.name} (dry run: the data fetched is kept in the database)"
         if target in foreign:
             bak = target.with_name(target.name + ".bak")

@@ -64,8 +64,9 @@ def companions(video):
     return out
 
 
-def rename_movie(db, fid, matcher, rcfg, prefer):
-    """Rename the movie file and its companions to "Title (Year)". Returns (new path or None, status text)."""
+def rename_movie(db, fid, matcher, rcfg, prefer, dry_run=False):
+    """Rename the movie file and its companions to "Title (Year)". Returns (new path or None, status text).
+    dry_run: only say what would be renamed (what was fetched for the title is still stored)."""
     row = db.file_get(fid)
     video = Path(row["path"])
     min_rank = VERDICT_RANK.get(str(rcfg.get("min_verdict", "PROBABLE")).upper(), 2)
@@ -89,6 +90,10 @@ def rename_movie(db, fid, matcher, rcfg, prefer):
     moves = [(video, target)] + [(f, video.with_name(stem + rest)) for f, rest in companions(video)]
     if target.exists() and target.name.lower() != video.name.lower():   # case-only change is fine on Windows
         return None, f"not renamed ({target.name} already exists)"
+    if dry_run:
+        n = len(moves) - 1
+        return None, f"would rename {video.name} -> {target.name}" + (f" (+{n} companion file{'s' if n != 1 else ''})"
+                                                                      if n else "")
     done = []
     for src, dst in moves:
         if dst.exists() and dst.name.lower() != src.name.lower():

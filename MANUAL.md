@@ -141,6 +141,7 @@ continue later. Files under 50 MB and files with "sample" in the name are skippe
 | `videoid D:\Movies --no-quick` | always scan fully, even when an NFO exists |
 | `videoid D:\Movies --no-subs` | don't try the subtitles first |
 | `videoid D:\Movies --no-log` | don't write the log file next to each film |
+| `videoid D:\Movies --kodi --rename --dry-run` | identify and store everything in the database, but write, rename and log nothing next to the films; shows what `--kodi` / `--rename` would do |
 | `videoid D:\Movies --cpu` | don't use the graphics card |
 | `videoid D:\Movies --no-recursive` | only this folder, not subfolders |
 | `videoid D:\Movies --json results.json` | also save all results to a JSON file |
